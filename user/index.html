@@ -1,0 +1,486 @@
+<!-- GALA 用户端（单文件）：HTML / CSS / JS 都在本文件。样式在同页 <style> 块，推荐问题在 #suggestions；改完刷新页面即可，无需构建 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GALA 智能问答助手</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='14' fill='%23165dff'/%3E%3Cpath d='M13 12h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-2a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z' fill='%23fff'/%3E%3Ccircle cx='17' cy='22.5' r='2.4' fill='%23165dff'/%3E%3Ccircle cx='24' cy='22.5' r='2.4' fill='%23165dff'/%3E%3Ccircle cx='31' cy='22.5' r='2.4' fill='%23165dff'/%3E%3C/svg%3E">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6fa;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+  }
+  .wrap {
+    width: 100%;
+    max-width: 720px;
+    height: 100vh;
+    display: flex;
+    background: #fff;
+    box-shadow: 0 0 20px rgba(0,0,0,0.05);
+    transition: max-width 0.25s ease;
+  }
+  /* 展示引用文档时才展开为左右结构；默认聊天窗口居中 */
+  .wrap.with-doc { max-width: 1320px; }
+  .app {
+    flex: 1 1 720px;
+    max-width: 720px;
+    height: 100vh;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  /* 右侧：引用文档原格式预览（Word / Markdown / PPT / TXT / PDF） */
+  .doc-panel {
+    flex: 1 1 560px;
+    min-width: 400px;
+    max-width: 640px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid #e4e6ef;
+    background: #eef1f6;
+  }
+  .doc-panel[hidden] { display: none; }
+  .doc-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #fff;
+    border-bottom: 1px solid #e5e8ef;
+    flex-shrink: 0;
+  }
+  .doc-bar-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1d2129;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .doc-bar-tip { font-size: 11px; color: #86909c; flex-shrink: 0; }
+  .doc-bar-close {
+    width: 26px; height: 26px; flex-shrink: 0;
+    border: none; border-radius: 6px; background: #f2f3f5;
+    color: #4e5969; font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .doc-bar-close:hover { background: #e5e8ef; }
+  .doc-frame { flex: 1; width: 100%; border: 0; display: block; background: #eef1f6; }
+  /* 视口不够宽时不硬挤双栏：文档面板改为全屏覆盖，避免表格被压成每字一行 */
+  @media (max-width: 1280px) {
+    .wrap { max-width: none; box-shadow: none; }
+    .app { max-width: none; }
+    .doc-panel { position: fixed; inset: 0; z-index: 20; max-width: none; min-width: 0; border-left: 0; }
+  }
+  header {
+    padding: 14px 20px;
+    background: linear-gradient(135deg, #165dff, #4e8cff);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .avatar { display: none; }
+  .logo { width: 42px; height: 42px; flex-shrink: 0; }
+  .logo svg { width: 100%; height: 100%; display: block; }
+  .header-info h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
+  .header-info .tip { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .msg { display: flex; gap: 10px; max-width: 88%; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg-bubble {
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.bot .msg-bubble { background: #f0f2f7; color: #222; border-top-left-radius: 4px; }
+  .msg.user .msg-bubble { background: #165dff; color: #fff; border-top-right-radius: 4px; }
+  .msg.error .msg-bubble { background: #fde8e8; color: #c9302c; border-top-left-radius: 4px; }
+  .msg.sources { align-self: center; max-width: 100%; }
+  .sources-card {
+    background: #f8f9fc;
+    border: 1px solid #e4e6ef;
+    border-radius: 10px;
+    padding: 10px 14px;
+    width: 100%;
+    font-size: 12px;
+    color: #666;
+  }
+  .sources-card .label { font-weight: 600; color: #165dff; margin-bottom: 4px; }
+  .sources-card .item {
+    padding: 3px 0;
+    border-bottom: 1px dashed #e4e6ef;
+  }
+  .sources-card .item:last-child { border-bottom: none; }
+  .sources-card .item .name { color: #333; font-weight: 500; }
+  .sources-card .item .name a { color: #165dff; text-decoration: none; }
+  .sources-card .item .name a:hover { text-decoration: underline; }
+  .sources-card .item .name .doc-link {
+    background: none; border: none; padding: 0;
+    font: inherit; font-weight: 500; color: #165dff; cursor: pointer;
+  }
+  .sources-card .item .name .doc-link:hover { text-decoration: underline; }
+  .sources-card .item .sim { color: #999; margin-left: 6px; }
+  .msg-bubble .cite { color: #165dff; text-decoration: none; font-weight: 600; }
+  .msg-bubble .cite:hover { text-decoration: underline; }
+  .msg-bubble .msg-link {
+    display: inline-block; margin-left: 6px; color: #165dff;
+    text-decoration: underline; font-weight: 600; white-space: nowrap;
+  }
+  .typing { display: flex; align-items: center; gap: 4px; padding: 12px 16px; }
+  .typing span {
+    width: 7px; height: 7px; background: #bbb; border-radius: 50%;
+    animation: blink 1.4s infinite;
+  }
+  .typing-text { font-style: normal; font-size: 13px; color: #86909c; margin-left: 6px; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%,60%,100%{opacity:.3} 30%{opacity:1} }
+  footer {
+    padding: 12px 16px;
+    border-top: 1px solid #eee;
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+    background: #fff;
+  }
+  footer textarea {
+    flex: 1;
+    border: 1px solid #e4e6ef;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+    height: 42px;
+    max-height: 120px;
+    line-height: 1.4;
+    outline: none;
+  }
+  footer textarea:focus { border-color: #165dff; }
+  footer button {
+    background: #165dff;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0 20px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  footer button:disabled { background: #a0b4d8; cursor: not-allowed; }
+  .welcome {
+    text-align: center;
+    padding: 30px 20px;
+    color: #888;
+    font-size: 13px;
+  }
+  .welcome-logo { width: 68px; height: 68px; margin: 0 auto 14px; }
+  .welcome-logo svg { width: 100%; height: 100%; display: block; }
+  .suggestions {
+    padding: 0 20px 12px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+    justify-content: center;
+  }
+  .suggestions button {
+    background: #f0f2f7;
+    border: 1px solid #e4e6ef;
+    color: #165dff;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .suggestions button:hover { background: #e4ebff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="app">
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 48 48" role="img" aria-label="GALA 智能问答助手">
+        <defs>
+          <linearGradient id="gala-logo-bg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e2ebff"/>
+          </linearGradient>
+          <linearGradient id="gala-logo-bubble" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#165dff"/>
+            <stop offset="100%" stop-color="#6f9bff"/>
+          </linearGradient>
+        </defs>
+        <rect x="1" y="1" width="46" height="46" rx="14" fill="url(#gala-logo-bg)"/>
+        <path d="M12 12h24a6 6 0 0 1 6 6v8a6 6 0 0 1-6 6h-13l-8 7v-7h-3a6 6 0 0 1-6-6v-8a6 6 0 0 1 6-6z" fill="url(#gala-logo-bubble)"/>
+        <circle cx="17" cy="22" r="2.3" fill="#fff"/>
+        <circle cx="24" cy="22" r="2.3" fill="#fff"/>
+        <circle cx="31" cy="22" r="2.3" fill="#fff"/>
+      </svg>
+    </div>
+    <div class="header-info">
+      <h1>GALA 智能问答助手</h1>
+      <div class="tip">基于企业知识库，解答产品使用与业务问题</div>
+    </div>
+  </header>
+
+  <div class="messages" id="messages">
+    <div class="welcome" id="welcome">
+      <div class="welcome-logo">
+        <svg viewBox="0 0 48 48" role="img" aria-label="GALA">
+          <defs>
+            <linearGradient id="gala-logo-bg-big" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#165dff"/>
+              <stop offset="100%" stop-color="#6f9bff"/>
+            </linearGradient>
+          </defs>
+          <rect x="1" y="1" width="46" height="46" rx="14" fill="url(#gala-logo-bg-big)"/>
+          <path d="M12 12h24a6 6 0 0 1 6 6v8a6 6 0 0 1-6 6h-13l-8 7v-7h-3a6 6 0 0 1-6-6v-8a6 6 0 0 1 6-6z" fill="#fff"/>
+          <circle cx="17" cy="22" r="2.3" fill="#165dff"/>
+          <circle cx="24" cy="22" r="2.3" fill="#165dff"/>
+          <circle cx="31" cy="22" r="2.3" fill="#165dff"/>
+        </svg>
+      </div>
+      您好！我是 GALA 智能问答助手，随时为您解答产品或业务问题。
+    </div>
+  </div>
+
+  <div class="suggestions" id="suggestions">
+    <button onclick="ask('APP 用户端有哪些核心功能？')">APP 用户端有哪些核心功能？</button>
+    <button onclick="ask('如何创建直播间？')">如何创建直播间？</button>
+    <button onclick="ask('GALA 管理后台能做什么？')">GALA 管理后台能做什么？</button>
+  </div>
+
+  <footer>
+    <textarea id="input" placeholder="请输入您的问题..." onkeydown="onKey(event)"></textarea>
+    <button id="sendBtn" onclick="send()">发送</button>
+  </footer>
+</div>
+
+<!-- 右侧：被引用文档的原格式预览（回答后自动展示，点击来源可切换） -->
+<aside class="doc-panel" id="docPanel" hidden>
+  <div class="doc-bar">
+    <div class="doc-bar-title" id="docTitle">文档预览</div>
+    <div class="doc-bar-tip">引用片段已定位</div>
+    <button class="doc-bar-close" onclick="closeDoc()" title="收起文档">×</button>
+  </div>
+  <iframe class="doc-frame" id="docFrame" title="引用文档预览"></iframe>
+</aside>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+const welcomeEl = document.getElementById('welcome');
+const suggestionsEl = document.getElementById('suggestions');
+
+let sessionId = null;
+let loading = false;
+
+// 用户在 iframe 里需要知道父窗口 origin 吗？不需要，API 同源。
+// 管理端入口（/user/index.html?source=admin）走 /api/chat，会话来源记为 admin
+const IS_ADMIN = new URLSearchParams(location.search).get('source') === 'admin';
+const API = IS_ADMIN ? '/api/chat' : '/api/public/chat';
+if (IS_ADMIN) {
+  const tip = document.querySelector('.header-info .tip');
+  if (tip) tip.textContent = '管理端会话 · 提问会归档到「问答记录」';
+}
+
+// 本次回答的参考来源；正文里的 [编号] 按它生成跳转链接
+let currentSources = [];
+let answerText = '';
+
+const escHtml = t => String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+const wrapEl = document.querySelector('.wrap');
+const docPanel = document.getElementById('docPanel');
+const docFrame = document.getElementById('docFrame');
+const docTitle = document.getElementById('docTitle');
+
+// 右侧展示被引用文档：按导入时的原格式渲染（Word / Markdown / PPT / TXT），
+// 并按后端绑定的 span 精确定位到支撑回答的那句原文，而不是整段切片
+function showDoc(source) {
+  if (!source || !source.doc_id) return;
+  const chunk = source.chunk_index || 0;
+  const span = source.span_start || 0;
+  const spanLen = source.span_len || 0;
+  docTitle.textContent = source.filename || '文档预览';
+  docFrame.src = `/doc/${source.doc_id}?chunk=${chunk}&span=${span}&span_len=${spanLen}&embed=1`;
+  docPanel.hidden = false;
+  wrapEl.classList.add('with-doc');   // 展开为左右结构
+}
+function closeDoc() {
+  docPanel.hidden = true;
+  docFrame.src = 'about:blank';
+  wrapEl.classList.remove('with-doc'); // 收起后回到居中布局
+}
+
+// 回答正文：先转义，再把 [n] 变成可点击来源；知识库来源在右侧预览打开，联网来源跳原文网址
+function renderAnswer(text) {
+  return escHtml(text).replace(/\[(\d+)\]/g, (m, d) => {
+    const s = currentSources.find(x => x.index === Number(d));
+    if (!s) return m;
+    if (s.type === 'web' || s.url) {
+      return `<a class="cite" href="${escHtml(s.url)}" target="_blank" rel="noopener">[${d}]</a>`;
+    }
+    return `<a class="cite" href="#" data-cite="${d}">[${d}]</a>`;
+  });
+}
+
+function addMsg(role, content, extra) {
+  if (welcomeEl) welcomeEl.remove();
+  if (suggestionsEl) suggestionsEl.remove();
+  const div = document.createElement('div');
+  if (role === 'sources') {
+    div.className = 'msg sources';
+    const card = document.createElement('div');
+    card.className = 'sources-card';
+    const rows = content.map(s => {
+      const isWeb = s.type === 'web' || !!s.url;
+      const tag = isWeb ? '联网' : `相似度 ${Math.round((s.similarity || 0) * 100)}%`;
+      const label = `[${s.index}] ${escHtml(s.filename)}`;
+      const name = isWeb && s.url
+        ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${label}</a>`
+        : (s.doc_id ? `<button type="button" class="doc-link" data-doc="${s.index}">${label}</button>` : label);
+      return `<div class="item"><span class="name">${name}</span><span class="sim">${tag}</span></div>`;
+    }).join('');
+    card.innerHTML = '<div class="label">📎 参考来源</div>' + rows;
+    // 点击来源 -> 右侧切换到该文档的对应片段（不再新窗口打开原文）
+    card.addEventListener('click', e => {
+      const btn = e.target.closest('[data-doc]');
+      if (!btn) return;
+      showDoc(currentSources.find(x => x.index === Number(btn.dataset.doc)));
+    });
+    div.appendChild(card);
+  } else if (role === 'error' && extra && extra.settingsLink) {
+    // 模型服务未配置：文案带跳转入口，点击直达管理端「设置 → 模型服务」
+    div.className = 'msg error';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.innerHTML = escHtml(content) +
+      '<a class="msg-link" href="/admin/?tab=settings" target="_blank" rel="noopener">前往管理后台配置 API Key →</a>';
+    div.appendChild(bubble);
+  } else {
+    div.className = 'msg ' + role;
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.textContent = content;
+    div.appendChild(bubble);
+  }
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function onKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+}
+
+// 正文里的 [n] 引用：点击在右侧定位对应文档片段
+messagesEl.addEventListener('click', e => {
+  const a = e.target.closest('a[data-cite]');
+  if (!a) return;
+  e.preventDefault();
+  showDoc(currentSources.find(x => x.index === Number(a.dataset.cite)));
+});
+
+function ask(text) { inputEl.value = text; send(); }
+
+async function send() {
+  const q = inputEl.value.trim();
+  if (!q || loading) return;
+  inputEl.value = '';
+  addMsg('user', q);
+
+  // typing indicator
+  const typing = document.createElement('div');
+  typing.className = 'msg bot';
+  typing.innerHTML = '<div class="typing"><span></span><span></span><span></span><em class="typing-text">正在检索知识库…</em></div>';
+  messagesEl.appendChild(typing);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  loading = true;
+  sendBtn.disabled = true;
+
+  try {
+    const resp = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, session_id: sessionId, visitor_name: IS_ADMIN ? '管理员' : '' })
+    });
+
+    let botBubble = null;
+    answerText = '';
+    currentSources = [];
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let evt; try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (evt.type === 'session') { sessionId = evt.session_id; }
+        else if (evt.type === 'sources') {
+          currentSources = evt.sources || [];
+          // 只展示来源卡片，不自动弹出文档；点击正文 [n] 或来源文件名时才在右侧打开
+          if (currentSources.length) addMsg('sources', currentSources);
+          const tip = typing.querySelector('.typing-text');
+          if (tip) tip.textContent = '正在生成回答…';
+        } else if (evt.type === 'token') {
+          if (!botBubble) {
+            typing.remove();
+            botBubble = addMsg('bot', '');
+          }
+          answerText += evt.content;
+          botBubble.querySelector('.msg-bubble').innerHTML = renderAnswer(answerText);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else if (evt.type === 'error') {
+          if (/未配置|API\s*Key/i.test(evt.message || '')) {
+            addMsg('error', '问答服务尚未配置模型 API Key，请先完成配置后重试。', { settingsLink: true });
+          } else {
+            addMsg('error', '⚠️ ' + evt.message);
+          }
+          typing.remove();
+        }
+      }
+    }
+    typing.remove();
+  } catch (err) {
+    typing.remove();
+    addMsg('error', '问答服务暂不可用，请检查管理后台的模型 API Key 配置后重试。', { settingsLink: true });
+  }
+
+  loading = false;
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+</script>
+</body>
+</html>

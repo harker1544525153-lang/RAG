@@ -1,0 +1,15 @@
+# Vercel 上传源码时额外排除（.gitignore 已排除大部分，这里再兜底）
+backend/venv
+backend/.venv
+backend/.env
+backend/data
+backend/data_legacy_backup_*
+frontend/node_modules
+frontend/.vite
+tests
+DOC
+.screenshots
+.workbuddy
+*.db
+*.db-wal
+*.db-shm

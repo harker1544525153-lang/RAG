@@ -1,0 +1,11 @@
+# ---------- 构建上下文忽略 ----------
+.git/
+.gitignore
+backend/data/
+backend/data_legacy_backup_*/
+backend/.env
+frontend/node_modules/
+frontend/dist/
+**/__pycache__/
+**/*.py[cod]
+*.log

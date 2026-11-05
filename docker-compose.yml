@@ -1,0 +1,42 @@
+# 本地模拟「云端模式」：PostgreSQL + pgvector 业务库/向量库
+# 启动：docker compose up --build
+# 说明：默认未启用本地 BGE 模型，使用 hash 向量仅验证流程；接入真实 API 时
+#       把 EMBEDDING_PROVIDER 改为 openai 并填写 EMBEDDING_API_KEY 即可。
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag_pass
+      POSTGRES_DB: rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      args:
+        REQUIREMENTS: backend/requirements-cloud.txt
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag:rag_pass@db:5432/rag
+      VECTOR_BACKEND: pgvector
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      SEED_ON_STARTUP: "true"
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

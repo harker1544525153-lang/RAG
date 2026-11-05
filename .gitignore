@@ -1,0 +1,51 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ---------- 环境变量 / 密钥 ----------
+backend/.env
+.env
+.env.local
+*.pem
+
+# ---------- 运行时数据 ----------
+backend/data/
+backend/data_legacy_backup_*/
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+chroma/
+
+# ---------- 业务文档原件（仅本地使用，禁止入库/上云） ----------
+DOC/
+
+# ---------- 前端 ----------
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.timestamp-*.mjs
+
+# ---------- 部署 ----------
+.vercel/
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# ---------- 本地工具产物 ----------
+.screenshots/
+.workbuddy/

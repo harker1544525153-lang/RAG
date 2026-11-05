@@ -1,0 +1,19 @@
+# 云端精简依赖：PostgreSQL(pgvector) + 云端 Embedding API 模式使用
+# 相比 requirements.txt 去掉了 chromadb 与 sentence-transformers（省去 torch 等约 2GB 依赖）
+# 构建镜像：docker build --build-arg REQUIREMENTS=backend/requirements-cloud.txt .
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+sqlalchemy>=2.0.30
+psycopg[binary]>=3.2.0
+pgvector>=0.3.0
+
+langchain-text-splitters>=0.2.0
+
+pymupdf>=1.24.0
+python-docx>=1.1.0
+python-pptx>=0.6.23
+
+openai>=1.40.0
+python-dotenv>=1.0.0
