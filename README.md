@@ -697,6 +697,8 @@ postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=re
 > **`DOC/` 里的业务文档原件禁止提交、禁止上传云端**：`.gitignore` 与 `.vercelignore` 均已排除 `DOC/`。
 > 云端没有初始文档，部署完成后在管理端「文档管理」手动上传即可（入库时会生成 `preview_html`，原文件丢失也能预览）。
 > `backend/.env`、`backend/data/`、`backend/data_legacy_backup_*/` 同样不会入库。
+> 若曾误提交过 `DOC/` 或密钥：`git push --force` **不能**清除 GitHub 上的旧 commit（仍可通过 commit hash 访问），
+> 必须删除该仓库后重新创建并推送干净历史。
 
 ```bash
 git init -b main
