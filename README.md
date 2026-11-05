@@ -712,6 +712,30 @@ git push -u origin main
 
 `.gitignore` 已排除 `backend/.env`、`backend/data/`、`backend/venv/`、`DOC/`、`frontend/node_modules/`、`frontend/dist/`、`.screenshots/`、`.workbuddy/`，仓库里**不含任何密钥、业务文档原件与本地数据**。
 
+#### 2.1 后续更新：本地改完手动上传
+
+日常维护不需要重新初始化仓库，改完代码按下面三步推送即可：
+
+```bash
+# 1. 查看改动（DOC/、.env、data/ 不会出现在列表里）
+git status
+
+# 2. 只暂存代码与配置
+git add backend frontend user api scripts tests vercel.json requirements.txt README.md .gitignore .vercelignore .dockerignore
+
+# 3. 提交并推送，Vercel 自动触发新的 Production 部署
+git commit -m "fix: 说明本次修改"
+git push origin main
+```
+
+| 注意点 | 说明 |
+|---|---|
+| **Vercel 按仓库 ID 绑定** | GitHub 仓库删除/重建后，同名仓库也是新的 ID，必须在 Vercel **重新 Import** 或 Settings → Git **重新连接**，否则 `git push` 不会触发部署 |
+| **历史部署不会自动删除** | 旧部署（含旧代码快照与旧 URL）仍可访问，需在 Deployments 中逐个删除，或直接删除整个 Vercel 项目 |
+| **本机代理** | git 不会读取 Clash 的系统代理；本项目已在仓库级配置 `http.proxy=http://127.0.0.1:7897` + `http.sslBackend=openssl`，直接 `git push` 即可。换机器或换代理端口后重配：`git config http.proxy http://127.0.0.1:7897`、`git config https.proxy http://127.0.0.1:7897`、`git config http.sslBackend openssl` |
+| **只改前端也要推** | 改动 `frontend/src` 或 `user/index.html` 后同样要提交推送，Vercel 会重新执行 `npm run build`；本地无需手动构建 |
+| **DOC/ 与密钥** | 永远不进 `git add` 列表；需要更新云端知识库时，部署后在管理端「文档管理」上传，不要提交到仓库 |
+
 #### 3. 在 Vercel 导入仓库
 
 1. [Vercel 控制台](https://vercel.com/new) → Import Git Repository → 选中该仓库
@@ -728,7 +752,21 @@ git push -u origin main
 
 4. Deploy → Vercel 自动执行 `cd frontend && npm install && npm run build`，再把 `/api/index.py` 打包为 Python 函数，所有路由（`/`、`/admin/`、`/api/**`）统一交给 FastAPI。
 
+> **若之前已部署过旧仓库**：仓库删除/重建后，Vercel 的 Git 绑定会失效（Settings → Git 显示仓库不可用）。请先删除旧 Vercel 项目（同时清除历史部署快照），再按上面步骤 Import 新仓库；仅修改 Git 连接不会清除旧部署。
+
 #### 4. 首次访问与填写 Key
+
+**部署自检（首次部署后按顺序检查）**
+
+| 检查项 | 期望结果 |
+|---|---|
+| `https://<project>.vercel.app/api/health` | 返回 200 JSON（服务与数据库连通） |
+| `https://<project>.vercel.app/` | 用户端聊天页正常渲染 |
+| `https://<project>.vercel.app/admin/` | 管理端正常渲染 |
+| 管理端上传文档 → 提问 | 有回答，点击引用 `[n]` 能打开右侧原文并高亮对应片段 |
+
+若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否保持默认空值。
+若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否以 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
 
 部署完成后访问：
 
