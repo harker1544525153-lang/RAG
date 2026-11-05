@@ -664,107 +664,64 @@ Remove-Item backend\data\rag.db, backend\data\rag.db-wal, backend\data\rag.db-sh
 
 ## 云端部署（Vercel + Neon）
 
-组合：**Vercel 托管应用 + Neon（免费 PostgreSQL + pgvector）**。仓库已内置 `api/index.py`、`vercel.json`、`requirements.txt`，导入即可部署，无需手动配置构建命令。
+前提：代码已推送到 GitHub 仓库，Vercel 与 Neon 账号已就绪。仓库已内置 `api/index.py`、`vercel.json`、`requirements.txt`，无需手动改构建命令。
 
-### 1. 创建 Neon 数据库
-
-在 [Neon](https://neon.tech) 创建项目，复制连接串（注意把开头的 `postgresql://` 改成 `postgresql+psycopg://`，SQLAlchemy 才认得驱动）：
-
-```
-postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
-```
-
-> 首次启动会自动执行 `CREATE EXTENSION IF NOT EXISTS vector` 并建表；Neon 默认已支持 pgvector。
-
-### 2. 首次推送代码到 GitHub
-
-**只上传 `backend/`、`frontend/` 两个目录无法部署**（缺少 Serverless 入口、路由与依赖清单）。仓库根目录需保留：
-
-| 必须提交 | 作用 |
-|---|---|
-| `backend/` | FastAPI 应用、依赖清单；`.env`、`data/`、`venv/` 自动排除 |
-| `frontend/` | 管理端源码；`dist/` 由 Vercel 构建阶段生成，不提交 |
-| `user/` | 用户端单文件聊天页（`/`，可 iframe 嵌入） |
-| `api/index.py` | Vercel Serverless 入口（把 `backend/` 加入 `sys.path` 并导出 `app`） |
-| `vercel.json` | 构建前端 + 全量路由交给 FastAPI |
-| `requirements.txt` | Vercel 函数依赖（= `backend/requirements-cloud.txt`） |
-| `scripts/`、`tests/`、`Dockerfile`、`docker-compose.yml` | 启动脚本 / 冒烟测试 / 容器部署（可选） |
-
-> **`DOC/` 里的业务文档原件禁止提交、禁止上传云端**：`.gitignore` 与 `.vercelignore` 均已排除 `DOC/`。
-> 云端没有初始文档，部署完成后在管理端「文档管理」手动上传即可（入库时会生成 `preview_html`，原文件丢失也能预览）。
-> `backend/.env`、`backend/data/`、`backend/data_legacy_backup_*/` 同样不会入库。
-> 若曾误提交过 `DOC/` 或密钥：`git push --force` **不能**清除 GitHub 上的旧 commit（仍可通过 commit hash 访问），
-> 必须删除该仓库后重新创建并推送干净历史。
+### 1. 上传代码到 GitHub
 
 ```bash
-git init -b main
-git add backend frontend user api scripts tests vercel.json requirements.txt \
-        Dockerfile docker-compose.yml start.bat restart.bat README.md \
-        .gitignore .vercelignore .dockerignore
-git commit -m "feat: RAG 双端架构（用户端智能客服 + 管理端文档/记录）"
-git remote add origin https://github.com/harker1544525153-lang/RAG.git
-git push -u origin main
-```
-
-`.gitignore` 已排除 `backend/.env`、`backend/data/`、`backend/venv/`、`DOC/`、`frontend/node_modules/`、`frontend/dist/`、`.screenshots/`、`.workbuddy/`，仓库里**不含任何密钥、业务文档原件与本地数据**。
-
-### 3. 后续更新：手动提交并推送
-
-日常维护不需要重新初始化仓库，改完代码按下面三步推送即可：
-
-```bash
-# 1. 查看改动（DOC/、.env、data/ 不会出现在列表里）
 git status
-
-# 2. 只暂存代码与配置
 git add backend frontend user api scripts tests vercel.json requirements.txt README.md .gitignore .vercelignore .dockerignore
-
-# 3. 提交并推送，Vercel 自动触发新的 Production 部署
-git commit -m "fix: 说明本次修改"
+git commit -m "feat: RAG 双端架构（用户端智能客服 + 管理端文档/记录）"
 git push origin main
+```
+
+首次初始化仓库时先执行 `git init -b main` 与 `git remote add origin https://github.com/<user>/<repo>.git`，再执行上面三条命令。
+
+| 规则 | 说明 |
+|---|---|
+| 必须提交 | `backend/`、`frontend/`、`user/`、`api/index.py`、`vercel.json`、`requirements.txt`；`frontend/dist/` 由 Vercel 构建生成，不提交 |
+| 禁止提交 | `DOC/`（业务文档原件）、`backend/.env`、`backend/data/`、任何密钥；`.gitignore` 与 `.vercelignore` 已排除 |
+| 只改前端也要推 | 改动 `frontend/src` 或 `user/index.html` 后同样要提交推送，Vercel 会重新执行 `npm run build` |
+
+> 若曾误提交 DOC/ 或密钥：`git push --force` 不能清除 GitHub 上的旧 commit，必须删除仓库重建。
+
+### 2. 在 Vercel 创建 Project 并配置 Neon
+
+1. 在 [Neon](https://neon.tech) 创建数据库，复制连接串并把开头改为 `postgresql+psycopg://`：
+   `postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`
+2. [Vercel](https://vercel.com/new) → Import Git Repository → 选择该仓库
+3. Framework Preset 选 **Other**，Root Directory 留空（构建与路由由 `vercel.json` 指定）
+4. 创建时在 **Environment Variables** 填好 Neon 对应 Key：
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `DATABASE_URL` | 是 | Neon 连接串（`postgresql+psycopg://...`） |
+| `EMBEDDING_PROVIDER` | 否 | 默认 `openai`（Vercel 装不下本地 BGE，勿改回 `local`） |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_MODEL` | 否 | 也可部署后在管理端「设置」填写 |
+| `ALLOW_ORIGINS` | 否 | 收敛 CORS 时填线上域名 |
+
+5. Deploy：Vercel 自动执行 `cd frontend && npm install && npm run build`，再把 `api/index.py` 打包为 Python 函数，`/`、`/admin/`、`/api/**` 统一交给 FastAPI
+6. 首次启动会自动执行 `CREATE EXTENSION IF NOT EXISTS vector` 并建表，Neon 默认支持 pgvector
+
+> 仓库删除/重建后，Vercel 按仓库 ID 绑定的 Git 连接会失效：需删除旧 Project 重新 Import，否则 `git push` 不会触发部署。
+
+### 3. 后续更新
+
+```bash
+git pull origin main   # 同步远端改动
+git status
+git add backend frontend user api scripts tests vercel.json requirements.txt README.md .gitignore .vercelignore .dockerignore
+git commit -m "fix: 说明本次修改"
+git push origin main   # Vercel 自动重新部署
 ```
 
 | 注意点 | 说明 |
 |---|---|
-| **Vercel 按仓库 ID 绑定** | GitHub 仓库删除/重建后，同名仓库也是新的 ID，必须在 Vercel **重新 Import** 或 Settings → Git **重新连接**，否则 `git push` 不会触发部署 |
-| **历史部署不会自动删除** | 旧部署（含旧代码快照与旧 URL）仍可访问，需在 Deployments 中逐个删除，或直接删除整个 Vercel 项目 |
-| **本机代理** | git 不会读取 Clash 的系统代理；本项目已在仓库级配置 `http.proxy=http://127.0.0.1:7897` + `http.sslBackend=openssl`，直接 `git push` 即可。换机器或换代理端口后重配：`git config http.proxy http://127.0.0.1:7897`、`git config https.proxy http://127.0.0.1:7897`、`git config http.sslBackend openssl` |
-| **只改前端也要推** | 改动 `frontend/src` 或 `user/index.html` 后同样要提交推送，Vercel 会重新执行 `npm run build`；本地无需手动构建 |
-| **DOC/ 与密钥** | 永远不进 `git add` 列表；需要更新云端知识库时，部署后在管理端「文档管理」上传，不要提交到仓库 |
+| 本机代理 | 本项目已配置 `http.proxy=http://127.0.0.1:7897` + `http.sslBackend=openssl`；换机器后重新执行 `git config http.proxy ...` |
+| 历史部署 | Vercel 不会自动删除旧部署，可在 Deployments 里清理 |
+| DOC/ 与密钥 | 永远不进 `git add`；云端知识库在管理端「文档管理」上传 |
 
-### 4. 在 Vercel 导入仓库
-
-1. [Vercel 控制台](https://vercel.com/new) → Import Git Repository → 选中该仓库
-2. Framework Preset 选 **Other**（构建命令、输出目录都由 `vercel.json` 指定，保持默认即可）
-3. 在 **Environment Variables** 中至少添加：
-
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `DATABASE_URL` | ✅ | Neon 连接串（`postgresql+psycopg://...`） |
-| `EMBEDDING_PROVIDER` | 可选 | 默认已是 `openai`（Vercel 上装不下本地 BGE，不建议改回 `local`） |
-| `EMBEDDING_BASE_URL` | 可选 | 默认 `https://api.siliconflow.cn/v1`，也可部署后在管理端设置 |
-| `EMBEDDING_API_MODEL` | 可选 | 如 `BAAI/bge-m3`，也可部署后在管理端设置 |
-| `ALLOW_ORIGINS` | 可选 | 收敛 CORS 时填线上域名，多个用英文逗号分隔 |
-
-4. Deploy → Vercel 自动执行 `cd frontend && npm install && npm run build`，再把 `/api/index.py` 打包为 Python 函数，所有路由（`/`、`/admin/`、`/api/**`）统一交给 FastAPI。
-
-> **若之前已部署过旧仓库**：仓库删除/重建后，Vercel 的 Git 绑定会失效（Settings → Git 显示仓库不可用）。请先删除旧 Vercel 项目（同时清除历史部署快照），再按上面步骤 Import 新仓库；仅修改 Git 连接不会清除旧部署。
-
-### 5. 首次访问与初始化
-
-**部署自检（首次部署后按顺序检查）**
-
-| 检查项 | 期望结果 |
-|---|---|
-| `https://<project>.vercel.app/api/health` | 返回 200 JSON（服务与数据库连通） |
-| `https://<project>.vercel.app/` | 用户端聊天页正常渲染 |
-| `https://<project>.vercel.app/admin/` | 管理端正常渲染 |
-| 管理端上传文档 → 提问 | 有回答，点击引用 `[n]` 能打开右侧原文并高亮对应片段 |
-
-若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否保持默认空值。
-若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否以 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
-
-部署完成后访问：
+### 4. 首次访问与初始化
 
 | 端 | 地址 |
 |---|---|
@@ -772,21 +729,25 @@ git push origin main
 | 管理端后台 | `https://<project>.vercel.app/admin/` |
 | 健康检查 | `https://<project>.vercel.app/api/health` |
 
-**默认设置中的 Key 都是空的**，首次进入管理端 →「设置」需填写：
+部署自检：`/api/health` 返回 200 JSON；`/` 与 `/admin/` 正常渲染；上传文档后提问有回答，点击引用 `[n]` 能打开右侧原文并高亮。
+
+若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否为空。
+若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否为 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
+
+首次进入管理端 →「设置」填写 Key（默认均为空，保存即写入数据库，无需重新部署）：
 
 | 配置 | 位置 | 说明 |
 |---|---|---|
 | 大模型 API Key / Base URL / 模型名 | 设置 → 模型服务 → 大模型 | 不填则问答提示缺少 Key |
 | 向量化 Key（可留空复用大模型 Key） | 设置 → 模型服务 → 向量化 | openai 兼容 Embedding API |
-| Tavily Key（可选） | 设置 → 模型服务 → 联网搜索 | 不填则自动跳过联网 |
+| Tavily Key（可选） | 设置 → 模型服务 → 联网搜索 | 不填则跳过联网 |
 
-保存即生效（写入 `app_settings` 表 / Neon），无需重新部署。首次使用请在「文档管理」上传文档，向量写入 pgvector 后即可问答（`DOC/` 未打包进 Serverless 函数，「导入初始文档」在线上不可用）。
+首次使用在「文档管理」上传文档，向量写入 pgvector 后即可问答（`DOC/` 未打包进 Serverless 函数，「导入初始文档」在线上不可用）。
 
-> **Serverless 限制（务必了解）**
-> - Vercel 函数文件系统只读，数据目录自动落到 `/tmp/rag-data`：**业务库与向量必须走 Neon（`DATABASE_URL`）**，否则冷启动后数据丢失。
-> - 上传的**原始文件**只存在于 `/tmp`，实例回收即丢失（文档元数据、切片与向量仍在 Neon，问答与检索不受影响）。但**入库时已把原文渲染成 HTML 存入 `documents.preview_html`**，右侧预览仍按 Word/PPT 原版式展示并锚定引用片段（超过 400KB 的文档会把内嵌图片换成「［图片］」占位以加快加载）；「重建向量索引」仍需原文件，云端实例回收后请重新上传。
-> - 升级前已上传的文档没有 `preview_html`：本地/常驻部署首次预览时会自动补齐，云端已丢失原文件的旧文档需重新上传一次。
-> - 函数最长执行 60 秒（`vercel.json` 已设 `maxDuration: 60`），冷启动有明显延迟；超长回答可能被中断。
+> **Serverless 限制**
+> - 文件系统只读，数据目录自动落到 `/tmp/rag-data`：**业务库与向量必须走 Neon（`DATABASE_URL`）**，否则冷启动后数据丢失。
+> - 上传原文件只存在于 `/tmp`，实例回收即丢失；但入库时已把原文渲染成 HTML 存入 `documents.preview_html`，右侧预览与引用高亮不受影响；「重建向量索引」仍需原文件。
+> - 函数最长执行 60 秒（`vercel.json` 已设 `maxDuration: 60`），冷启动有延迟。
 > - 不支持本地 BGE / ChromaDB，向量化固定用 OpenAI 兼容 API。
 
 ## 核心 API
