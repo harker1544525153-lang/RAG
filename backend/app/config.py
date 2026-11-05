@@ -75,8 +75,8 @@ class Settings:
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 
     # ---------- 分块策略（默认值，可在「设置」页运行时覆盖） ----------
-    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "600"))        # 500~1000 字符
-    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "120"))  # 约 20% 重叠，防跨段语义断裂
+    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "450"))        # 300~1000 字符
+    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "60"))   # 约 13% 重叠，防跨段语义断裂
 
     # ---------- 向量化模型（默认值，可在「设置」页运行时覆盖） ----------
     # local  本地开源 BGE（sentence-transformers，首次自动下载）
@@ -87,18 +87,19 @@ class Settings:
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
     EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "0"))  # 0 = 按模型自动推断
-    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
 
     # openai 兼容模式（EMBEDDING_PROVIDER=openai 时生效）
     # EMBEDDING_API_KEY 留空则复用 DASHCOPE_API_KEY（同属 OpenAI 兼容协议，无需重复填 Key）
     EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", "")
-    EMBEDDING_BASE_URL: str = os.getenv("EMBEDDING_BASE_URL", "https://api.siliconflow.cn/v1")
-    # 留空时：复用百炼则默认 text-embedding-v4，否则必须在 .env 指定模型名
-    EMBEDDING_API_MODEL: str = os.getenv("EMBEDDING_API_MODEL", "")
+    EMBEDDING_BASE_URL: str = os.getenv(
+        "EMBEDDING_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    EMBEDDING_API_MODEL: str = os.getenv("EMBEDDING_API_MODEL", "qwen3.7-text-embedding-flash")
 
     # ---------- 检索参数（默认值，可在「设置」页运行时覆盖） ----------
-    TOP_K: int = int(os.getenv("TOP_K", "5"))
-    SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", "0.35"))
+    TOP_K: int = int(os.getenv("TOP_K", "2"))
+    SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", "0.4"))
 
     # ---------- LLM（OpenAI 兼容协议，支持多家厂商） ----------
     # 优先级：阿里云百炼 DASHCOPE_* > DeepSeek DEEPSEEK_*
@@ -110,7 +111,7 @@ class Settings:
     DASHCOPE_BASE_URL: str = os.getenv(
         "DASHCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen-plus" if _use_dashscope else "deepseek-chat")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen3.8-flash")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
     # ---------- 联网搜索（Tavily，管理端「设置」可开启） ----------

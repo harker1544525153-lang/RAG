@@ -115,7 +115,9 @@ class OpenAICompatEmbedder:
 
     def _encode(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
-        batch = self.batch_size
+        # 百炼等 OpenAI 兼容 Embedding 接口单请求上限 20 条（超出会报
+        # Value error, batch size is invalid），这里统一截断，避免配置填大后上传失败
+        batch = max(1, min(int(self.batch_size or 10), 20))
         for i in range(0, len(texts), batch):
             part = texts[i : i + batch]
             resp = self.client.embeddings.create(model=self.api_model, input=part)
@@ -187,7 +189,11 @@ def _openai_params(cfg: dict) -> tuple[str, str, str]:
         return api_key, base_url, model
     llm_key = (cfg.get("llm_api_key") or "").strip()
     if llm_key:
-        return llm_key, base_url or (cfg.get("llm_base_url") or ""), model or "text-embedding-v4"
+        return (
+            llm_key,
+            base_url or (cfg.get("llm_base_url") or ""),
+            model or settings.EMBEDDING_API_MODEL or "text-embedding-v4",
+        )
     raise RuntimeError(
         "openai 向量化模式需要 API Key：请在管理端「设置 → 模型服务」填写向量化 Key，或复用大模型 Key"
     )
@@ -195,7 +201,7 @@ def _openai_params(cfg: dict) -> tuple[str, str, str]:
 
 def _build_embedder(cfg: dict) -> Embedder:
     provider = (cfg.get("embedding_provider") or "local").lower()
-    batch = int(cfg.get("embedding_batch_size") or 32)
+    batch = int(cfg.get("embedding_batch_size") or settings.EMBEDDING_BATCH_SIZE)
     if provider == "local":
         return LocalBGEEmbedder(cfg.get("embedding_local_model") or settings.EMBEDDING_MODEL, settings.EMBEDDING_DEVICE, batch)
     if provider == "openai":

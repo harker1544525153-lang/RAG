@@ -69,8 +69,8 @@ SPECS: dict[str, dict] = {
         "hint": "仅在向量化方式为 local 时生效，如 BAAI/bge-large-zh-v1.5",
     },
     "embedding_batch_size": {
-        "type": int, "min": 1, "max": 128, "group": "embedding",
-        "label": "批量大小", "unit": "条", "hint": "单次请求的文本条数，云端一般 10 ~ 20",
+        "type": int, "min": 1, "max": 20, "group": "embedding",
+        "label": "批量大小", "unit": "条", "hint": "单次请求的文本条数，百炼等接口上限 20",
     },
 
     # ---------------- 联网搜索（Tavily） -------------

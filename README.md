@@ -460,7 +460,7 @@ copy .env.example .env                # Windows
 # 1) 大模型密钥（二选一，百炼优先）
 DASHCOPE_API_KEY=sk-xxx
 DASHCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen-plus
+LLM_MODEL=qwen3.8-flash
 
 # 2) 本地向量化模型（开箱可用）
 EMBEDDING_PROVIDER=local
