@@ -32,7 +32,7 @@ DOC/
 
 # ---------- 前端 ----------
 frontend/node_modules/
-frontend/dist/
+# frontend/dist/ 需要提交：Vercel 构建阶段可能不执行前端构建，函数依赖这份产物托管 /admin/
 frontend/.vite/
 frontend/*.timestamp-*.mjs
 

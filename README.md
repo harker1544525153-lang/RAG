@@ -679,9 +679,9 @@ git push origin main
 
 | 规则 | 说明 |
 |---|---|
-| 必须提交 | `backend/`、`frontend/`、`user/`、`api/index.py`、`vercel.json`、`requirements.txt`；`frontend/dist/` 由 Vercel 构建生成，不提交 |
+| 必须提交 | `backend/`、`frontend/`（含本地 `npm run build` 生成的 `frontend/dist/`）、`user/`、`api/index.py`、`vercel.json`、`requirements.txt` |
 | 禁止提交 | `DOC/`（业务文档原件）、`backend/.env`、`backend/data/`、任何密钥；`.gitignore` 与 `.vercelignore` 已排除 |
-| 只改前端也要推 | 改动 `frontend/src` 或 `user/index.html` 后同样要提交推送，Vercel 会重新执行 `npm run build` |
+| 只改前端也要推 | 改动 `frontend/src` 或 `user/index.html` 后先在本地 `cd frontend && npm run build`，再把 `frontend/dist` 一并提交推送；Vercel 构建阶段不保证执行前端构建 |
 
 > 若曾误提交 DOC/ 或密钥：`git push --force` 不能清除 GitHub 上的旧 commit，必须删除仓库重建。
 
