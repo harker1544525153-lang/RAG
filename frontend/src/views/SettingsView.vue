@@ -364,6 +364,7 @@ async function load() {
     await loadDocCategories()
   } catch (e) {
     webMsg.value = '加载失败：' + e.message
+    modelMsg.value = '加载失败：' + e.message
   }
 }
 
