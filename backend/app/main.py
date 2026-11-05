@@ -130,6 +130,10 @@ def health():
 _admin_dist = BASE_DIR.parent / "frontend" / "dist"
 _user_dir = BASE_DIR.parent / "user"
 
+# 前端资源名带哈希可长期缓存，但 index.html 绝不能被缓存：
+# 否则重新部署后浏览器仍加载旧 index.html，里面引用的旧哈希文件已被删除 → 404 白屏
+_HTML_NOCACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
 if _admin_dist.exists():
     app.mount("/admin/assets", StaticFiles(directory=_admin_dist / "assets"), name="admin-assets")
 
@@ -138,19 +142,19 @@ if _admin_dist.exists():
         target = _admin_dist / full_path
         if full_path and target.is_file():
             return FileResponse(target)
-        return FileResponse(_admin_dist / "index.html")
+        return FileResponse(_admin_dist / "index.html", headers=_HTML_NOCACHE)
 
 if _user_dir.exists():
     @app.get("/")
     def serve_user_root():
-        return FileResponse(_user_dir / "index.html")
+        return FileResponse(_user_dir / "index.html", headers=_HTML_NOCACHE)
 
     @app.get("/user/{full_path:path}")
     def serve_user_assets(full_path: str):
         target = _user_dir / full_path
         if target.is_file():
             return FileResponse(target)
-        return FileResponse(_user_dir / "index.html")
+        return FileResponse(_user_dir / "index.html", headers=_HTML_NOCACHE)
 
 
 if __name__ == "__main__":

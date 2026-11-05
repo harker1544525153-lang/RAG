@@ -185,8 +185,8 @@ $body
   (function () {
     var doc = document.querySelector('.doc');
     if (!doc) return;
-    var quote = (doc.getAttribute('data-quote') || '').replace(/\s+/g, '');
-    var anchor = (doc.getAttribute('data-anchor') || '').replace(/\s+/g, '');
+    var quote = (doc.getAttribute('data-quote') || '').replace(/\\s+/g, '');
+    var anchor = (doc.getAttribute('data-anchor') || '').replace(/\\s+/g, '');
     if (!quote && !anchor) return;
 
     // 把正文文本节点拼成「去空白」的全文索引，实现按字符位置精确高亮
