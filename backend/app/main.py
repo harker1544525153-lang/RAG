@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, func
 
@@ -28,37 +28,48 @@ logger = logging.getLogger(__name__)
 _IS_SERVERLESS = bool(os.getenv("VERCEL"))
 
 
+# 启动阶段（建表 / 连库 / 载入配置）的失败原因：Serverless 下启动异常会被平台吞掉、
+# 表现为「整站空响应 500」，这里记录下来并让 /api/health 能返回，便于定位。
+_STARTUP_ERROR = None
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
-    db = SessionLocal()
+    global _STARTUP_ERROR
     try:
-        crud.ensure_default_categories(db)
-        category_service.ensure_seed(db)
-        if not _IS_SERVERLESS:
-            # 历史数据维护只在常驻部署执行：Serverless 每次冷启动都跑一遍会明显拖慢首个请求
-            crud.clear_stale_processing(db)
-            backfilled = crud.backfill_session_categories(db)
-            if backfilled:
-                logger.info("历史会话自动归档完成：%d 条", backfilled)
-        # 载入管理端保存的运行时配置（DB 覆盖 .env）
-        settings_service.refresh(db)
-        logger.info("运行时配置: 大模型=%s 向量化=%s", 
-                    settings_service.get_runtime()["llm_model"],
-                    settings_service.get_runtime()["embedding_provider"])
-    finally:
-        db.close()
+        init_db()
+        db = SessionLocal()
+        try:
+            crud.ensure_default_categories(db)
+            category_service.ensure_seed(db)
+            if not _IS_SERVERLESS:
+                # 历史数据维护只在常驻部署执行：Serverless 每次冷启动都跑一遍会明显拖慢首个请求
+                crud.clear_stale_processing(db)
+                backfilled = crud.backfill_session_categories(db)
+                if backfilled:
+                    logger.info("历史会话自动归档完成：%d 条", backfilled)
+            # 载入管理端保存的运行时配置（DB 覆盖 .env）
+            settings_service.refresh(db)
+            logger.info("运行时配置: 大模型=%s 向量化=%s", 
+                        settings_service.get_runtime()["llm_model"],
+                        settings_service.get_runtime()["embedding_provider"])
+        finally:
+            db.close()
 
-    if settings.SEED_ON_STARTUP and not _IS_SERVERLESS:
-        # 后台导入，避免大文档向量化阻塞服务启动
-        threading.Thread(target=seed_documents, name="seed-docs", daemon=True).start()
+        if settings.SEED_ON_STARTUP and not _IS_SERVERLESS:
+            # 后台导入，避免大文档向量化阻塞服务启动
+            threading.Thread(target=seed_documents, name="seed-docs", daemon=True).start()
 
-    # 后台预热向量化模型：避免用户首次提问时等待冷启动（CPU 下约 20 秒）
-    # Serverless 中后台线程会被冻结，跳过
-    if not _IS_SERVERLESS and settings_service.get_runtime().get("embedding_provider", "").lower() != "hash":
-        threading.Thread(target=warmup_embeddings, name="warmup-embed", daemon=True).start()
+        # 后台预热向量化模型：避免用户首次提问时等待冷启动（CPU 下约 20 秒）
+        # Serverless 中后台线程会被冻结，跳过
+        if not _IS_SERVERLESS and settings_service.get_runtime().get("embedding_provider", "").lower() != "hash":
+            threading.Thread(target=warmup_embeddings, name="warmup-embed", daemon=True).start()
 
-    logger.info("服务启动: %s", settings)
+        logger.info("服务启动: %s", settings)
+    except Exception as exc:
+        # 降级为「服务可响应、健康检查报错」，避免数据库不可用时整站变成无信息的 500
+        _STARTUP_ERROR = f"{type(exc).__name__}: {exc}"
+        logger.exception("启动初始化失败: %s", _STARTUP_ERROR)
     yield
     logger.info("服务关闭")
 
@@ -83,21 +94,34 @@ app.include_router(qa_categories.router)
 
 @app.get("/api/health")
 def health():
-    db = SessionLocal()
     try:
-        doc_total = db.execute(select(func.count(Document.id))).scalar_one()
-        msg_total = db.execute(select(func.count(ChatMessage.id))).scalar_one()
-    finally:
-        db.close()
-    return {
-        "status": "ok",
-        "database": "postgresql" if settings.is_postgres else "sqlite",
-        "vector_backend": settings.effective_vector_backend,
-        "embedding_provider": settings_service.get_runtime().get("embedding_provider"),
-        "documents": doc_total,
-        "chunks": get_vector_store().count(),
-        "messages": msg_total,
-    }
+        db = SessionLocal()
+        try:
+            doc_total = db.execute(select(func.count(Document.id))).scalar_one()
+            msg_total = db.execute(select(func.count(ChatMessage.id))).scalar_one()
+        finally:
+            db.close()
+        return {
+            "status": "ok",
+            "database": "postgresql" if settings.is_postgres else "sqlite",
+            "vector_backend": settings.effective_vector_backend,
+            "embedding_provider": settings_service.get_runtime().get("embedding_provider"),
+            "documents": doc_total,
+            "chunks": get_vector_store().count(),
+            "messages": msg_total,
+        }
+    except Exception as exc:
+        logger.exception("健康检查失败")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "database": "postgresql" if settings.is_postgres else "sqlite",
+                "vector_backend": settings.effective_vector_backend,
+                "error": f"{type(exc).__name__}: {exc}",
+                "startup_error": _STARTUP_ERROR,
+            },
+        )
 
 
 # 前端静态托管
