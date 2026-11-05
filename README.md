@@ -662,15 +662,11 @@ Remove-Item backend\data\rag.db, backend\data\rag.db-wal, backend\data\rag.db-sh
 >
 > 同理，重置数据库时三个文件要一起删除，否则可能残留旧数据。
 
-## 云端部署（免费方案）
+## 云端部署（Vercel + Neon）
 
-推荐组合：**Vercel（应用托管）+ Neon（免费 PostgreSQL + pgvector）**，零服务器运维；也可以 Docker 部署到 Railway / Render / Fly.io / Zeabur。
+组合：**Vercel 托管应用 + Neon（免费 PostgreSQL + pgvector）**。仓库已内置 `api/index.py`、`vercel.json`、`requirements.txt`，导入即可部署，无需手动配置构建命令。
 
-### 方式 A：Vercel + Neon（Serverless，推荐）
-
-仓库已内置 `api/index.py`、`vercel.json`、`requirements.txt`，导入即可部署，无需手动配置构建命令。
-
-#### 1. 创建 Neon 数据库
+### 1. 创建 Neon 数据库
 
 在 [Neon](https://neon.tech) 创建项目，复制连接串（注意把开头的 `postgresql://` 改成 `postgresql+psycopg://`，SQLAlchemy 才认得驱动）：
 
@@ -680,7 +676,7 @@ postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=re
 
 > 首次启动会自动执行 `CREATE EXTENSION IF NOT EXISTS vector` 并建表；Neon 默认已支持 pgvector。
 
-#### 2. 推送到 GitHub
+### 2. 首次推送代码到 GitHub
 
 **只上传 `backend/`、`frontend/` 两个目录无法部署**（缺少 Serverless 入口、路由与依赖清单）。仓库根目录需保留：
 
@@ -712,7 +708,7 @@ git push -u origin main
 
 `.gitignore` 已排除 `backend/.env`、`backend/data/`、`backend/venv/`、`DOC/`、`frontend/node_modules/`、`frontend/dist/`、`.screenshots/`、`.workbuddy/`，仓库里**不含任何密钥、业务文档原件与本地数据**。
 
-#### 2.1 后续更新：本地改完手动上传
+### 3. 后续更新：手动提交并推送
 
 日常维护不需要重新初始化仓库，改完代码按下面三步推送即可：
 
@@ -736,7 +732,7 @@ git push origin main
 | **只改前端也要推** | 改动 `frontend/src` 或 `user/index.html` 后同样要提交推送，Vercel 会重新执行 `npm run build`；本地无需手动构建 |
 | **DOC/ 与密钥** | 永远不进 `git add` 列表；需要更新云端知识库时，部署后在管理端「文档管理」上传，不要提交到仓库 |
 
-#### 3. 在 Vercel 导入仓库
+### 4. 在 Vercel 导入仓库
 
 1. [Vercel 控制台](https://vercel.com/new) → Import Git Repository → 选中该仓库
 2. Framework Preset 选 **Other**（构建命令、输出目录都由 `vercel.json` 指定，保持默认即可）
@@ -754,7 +750,7 @@ git push origin main
 
 > **若之前已部署过旧仓库**：仓库删除/重建后，Vercel 的 Git 绑定会失效（Settings → Git 显示仓库不可用）。请先删除旧 Vercel 项目（同时清除历史部署快照），再按上面步骤 Import 新仓库；仅修改 Git 连接不会清除旧部署。
 
-#### 4. 首次访问与填写 Key
+### 5. 首次访问与初始化
 
 **部署自检（首次部署后按顺序检查）**
 
@@ -792,99 +788,6 @@ git push origin main
 > - 升级前已上传的文档没有 `preview_html`：本地/常驻部署首次预览时会自动补齐，云端已丢失原文件的旧文档需重新上传一次。
 > - 函数最长执行 60 秒（`vercel.json` 已设 `maxDuration: 60`），冷启动有明显延迟；超长回答可能被中断。
 > - 不支持本地 BGE / ChromaDB，向量化固定用 OpenAI 兼容 API。
-
-#### 5. 线上回答比本地慢？按这个顺序排查
-
-| 原因 | 说明 | 处理 |
-|---|---|---|
-| **函数 Region 与数据库跨区** | Vercel 默认 `iad1`（美国），Neon 若在别的区，每次 SQL 往返 100~300ms，一次问答要往返十几次 | Vercel → Settings → Functions → Region 选与 Neon 相同的区（如新加坡 `sin1` 对应 Neon `ap-southeast-1`），重新部署 |
-| **Neon 连接串未用 pooled** | 每次冷启动都要新建 TLS 连接 | 用 Neon 控制台的 **Pooled connection** 串（主机名带 `-pooler`） |
-| **Embedding 走在线 API** | 云端没有本地 BGE，每次提问都要请求一次 Embedding 接口 | 项目已加问题向量 LRU 缓存；把 Embedding API 选到离函数最近的厂商 |
-| **冷启动** | Hobby 实例空闲后回收，下一个请求要重新启动函数 + 连库 | Serverless 固有；升级 Pro 可设最小实例数，或用方式 B 的 Docker 常驻部署 |
-| **联网搜索在关键路径** | 开启且模式为 `fallback` 时，知识库未命中才会多一次 Tavily 请求 | 设置 → 联网搜索：不需要时关闭，或确认知识库已命中 |
-| **本地向量模型没换** | 环境变量残留 `EMBEDDING_PROVIDER=local` 会加载失败/极慢 | 保持默认 `openai`；向量模型/分块参数变更后保存设置会自动重建切片，也可点「立即重建向量索引」手动重试 |
-
-> 代码层已针对延迟做过优化：冷启动跳过后台 seed / 预热 / 历史会话补齐；Postgres 关闭 `pool_pre_ping` 改用 `pool_recycle`；pgvector 不再重复建表、表存在性结果缓存；问题向量实例内缓存；会话与首条消息合并为一次提交；大模型客户端复用连接池。等待期间前端会提示「正在检索知识库… → 正在生成回答…」。以上改动需 `git push` 后由 Vercel 重新部署才会生效。
-
-### 方式 B：Docker（自有服务器 / Railway / Render）
-
-#### 1. 创建免费数据库
-
-在 [Neon](https://neon.tech) 或 [Supabase](https://supabase.com) 创建项目，复制连接串（Neon 形如）：
-
-```
-postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
-```
-
-> 首次启动会自动执行 `CREATE EXTENSION IF NOT EXISTS vector` 并建表；pgvector 索引在首次写入时创建。
-
-#### 2. 配置环境变量
-
-```env
-DATABASE_URL=postgresql+psycopg://...
-VECTOR_BACKEND=pgvector
-EMBEDDING_PROVIDER=openai
-EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
-EMBEDDING_API_MODEL=BAAI/bge-m3
-EMBEDDING_API_KEY=sk-...
-# 问答生成：阿里云百炼（推荐国内）或 DeepSeek 二选一
-DASHCOPE_API_KEY=sk-...
-DASHCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen-plus
-# DEEPSEEK_API_KEY=sk-...
-SEED_ON_STARTUP=true
-ALLOW_ORIGINS=https://your-domain.com
-```
-
-> 云端用 API 向量化可避免加载本地大模型，内存占用从数 GB 降到数百 MB，适配免费实例。
-
-#### 3. 部署（Docker 单服务）
-
-```bash
-# 精简镜像：不含 torch / chromadb，体积约节省 2GB
-docker build --build-arg REQUIREMENTS=backend/requirements-cloud.txt -t gala-rag .
-
-docker run -d -p 8080:8080 --name gala-rag --env-file backend/.env gala-rag
-```
-
-镜像内已同时打包：后端、管理端 `frontend/dist`（`/admin/`）、用户端 `user/`（`/`）。
-
-部署成功后访问：
-
-| 端 | 地址 |
-|---|---|
-| 用户端智能客服 | `https://your-domain/` |
-| 管理端后台 | `https://your-domain/admin/` |
-| 健康检查 | `https://your-domain/api/health` |
-
-托管平台（Railway / Render / Fly.io / Zeabur）直接连接 Git 仓库，构建方式选 Dockerfile，端口填 `8080`，然后在平台控制台逐条添加上一节的环境变量（**不要把 `.env` 提交到仓库**）。
-
-#### 4. 本地验证云端模式
-
-```bash
-docker compose up --build
-```
-
-自带 pgvector PostgreSQL + 应用，用于在本地验证云端链路：
-
-| 服务 | 地址 |
-|---|---|
-| 应用（双端） | http://localhost:8080/ 、http://localhost:8080/admin/ |
-| PostgreSQL | localhost:5432（账号见 `docker-compose.yml`） |
-
-#### 5. 代码托管与后续更新
-
-```bash
-git init
-git add .
-git commit -m "feat: RAG 双端架构（用户端智能客服 + 管理端文档/记录）"
-git remote add origin <your-repo>
-git push -u origin main
-```
-
-后续更新流程：改代码 → 本地验证 → `git push` → 托管平台自动重新构建；知识库文档直接放进 `DOC/` 一并提交，启动时自动导入。
-
-`backend/data/`、`backend/.env`、`frontend/node_modules/`、`frontend/dist/` 已由 `.gitignore` 排除；`DOC/` 会随仓库提交，云端部署后自动作为初始知识库。
 
 ## 核心 API
 
@@ -1125,7 +1028,7 @@ SYSTEM_PROMPT = """只能依据下面上下文回答，禁止编造。
 | 不知道数据存在哪 | 本地全部在 `backend/data/`（`rag.db` 含业务与向量、`uploads/` 原文件），详见 [数据存储与数据库](#数据存储与数据库) |
 | 备份后恢复数据变少 | SQLite 开了 WAL，最新写入在 `rag.db-wal`；停服务后复制整个 `backend/data/`，不要只拷 `rag.db` |
 | 想清空重建 | 停服务 → 删除 `rag.db`、`rag.db-wal`、`rag.db-shm` → 重启（自动建表并重新导入 `DOC/`） |
-| 上云怎么切 | 改 `DATABASE_URL` 为 Postgres 连接串，`VECTOR_BACKEND=pgvector`，`EMBEDDING_PROVIDER=openai`，详见 [云端部署](#云端部署免费方案) |
+| 上云怎么切 | 改 `DATABASE_URL` 为 Postgres 连接串，`VECTOR_BACKEND=pgvector`，`EMBEDDING_PROVIDER=openai`，详见上文「云端部署（Vercel + Neon）」 |
 
 ### I. 嵌入官网与安全
 
