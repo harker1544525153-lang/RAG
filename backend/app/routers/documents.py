@@ -58,7 +58,7 @@ def upload_document(
             category_id=category_id,
         )
     except Exception as e:
-        raise HTTPException(500, f"文档处理失败: {e}")
+        raise HTTPException(500, f"文档处理失败：{e}")
 
 
 @router.get("")

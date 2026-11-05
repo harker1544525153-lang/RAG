@@ -17,6 +17,42 @@ from app.services.vector import get_vector_store
 
 logger = logging.getLogger(__name__)
 
+# 常见第三方报错 -> 中文提示（前端「处理失败」列与上传接口都会用到）
+_ERROR_HINTS = [
+    ("batch size is invalid", "向量化批次超过接口上限（单次最多 20 条），请在「设置 → 向量化」把批量大小改为 20 以内后重试"),
+    ("should not be larger than", "向量化批次超过接口上限，请在「设置 → 向量化」把批量大小改为 20 以内后重试"),
+    ("arrearage", "模型账号额度不足或欠费，请充值后重试"),
+    ("rate limit", "请求过于频繁或超出额度，请稍后重试"),
+    ("invalid api key", "模型 API Key 无效，请检查「设置 → 模型服务」中的 Key"),
+    ("invalidapikey", "模型 API Key 无效，请检查「设置 → 模型服务」中的 Key"),
+    ("incorrect api key", "模型 API Key 不正确，请检查「设置 → 模型服务」中的 Key"),
+    ("unauthorized", "API Key 未授权或无效，请检查「设置 → 模型服务」中的 Key"),
+    (" 401", "API Key 无效或未授权，请检查「设置 → 模型服务」中的 Key"),
+    (" 403", "无权访问该模型，请检查账号权限"),
+    (" 429", "请求过于频繁或额度用尽，请稍后重试"),
+    ("timed out", "请求超时，请检查网络后重试"),
+    ("timeout", "请求超时，请检查网络后重试"),
+    ("name or service not known", "无法解析接口域名，请检查网络"),
+    ("password authentication failed", "数据库认证失败，请检查 DATABASE_URL 的账号密码"),
+    ("connection", "网络连接失败，请检查网络后重试"),
+    ("ssl", "HTTPS 证书校验失败，请检查网络或代理"),
+    ("is not a zip file", "文件已损坏或不是有效的 Word/Excel/PPT 文档"),
+    ("unsupported", "不支持的文件格式"),
+    ("no such file", "文件不存在或读取失败"),
+    ("permission denied", "文件无读取权限"),
+    ("jsondecode", "接口返回内容异常（不是合法 JSON）"),
+]
+
+
+def translate_error(exc: Exception) -> str:
+    """把英文/技术报错翻译成用户能看懂的中文原因（保留原始片段便于排查）。"""
+    raw = str(exc)
+    low = raw.lower()
+    for needle, zh in _ERROR_HINTS:
+        if needle in low:
+            return f"{zh}（原始错误：{raw[:180]}）"
+    return raw[:300]
+
 # 文件名关键词 -> 默认分类（seed / 首次上传时自动归类）
 CATEGORY_RULES = [
     ("后台", "后台管理"),
@@ -123,12 +159,13 @@ def ingest(
         }
     except Exception as e:
         logger.exception("文档处理失败: %s", filename)
-        crud.update_document(db, doc.id, status="failed", error=str(e), chunk_count=0)
+        reason = translate_error(e)
+        crud.update_document(db, doc.id, status="failed", error=reason, chunk_count=0)
         try:
             store.delete_by_doc(doc.id)
         except Exception:  # 回滚失败不掩盖原始异常
             logger.warning("回滚向量切片失败: %s", doc.id, exc_info=True)
-        raise
+        raise ValueError(reason) from e
 
 
 def remove(db, doc_id: str) -> bool:
@@ -168,7 +205,7 @@ def reindex_document(db, doc, path: Path, *, chunk_size: int | None = None, chun
     except Exception as e:
         # 解析/分块失败：旧切片仍可用，保留原记录，不标记失败状态
         logger.exception("重新分块失败: %s", doc.filename)
-        raise ValueError(str(e)) from e
+        raise ValueError(translate_error(e)) from e
 
     try:
         store.delete_by_doc(doc.id)
@@ -181,12 +218,13 @@ def reindex_document(db, doc, path: Path, *, chunk_size: int | None = None, chun
         )
     except Exception as e:
         logger.exception("重建向量失败: %s", doc.filename)
+        reason = translate_error(e)
         try:
             store.delete_by_doc(doc.id)
         except Exception:
             logger.warning("回滚向量切片失败: %s", doc.id, exc_info=True)
-        crud.update_document(db, doc.id, status="failed", error=str(e), chunk_count=0)
-        raise ValueError(str(e)) from e
+        crud.update_document(db, doc.id, status="failed", error=reason, chunk_count=0)
+        raise ValueError(reason) from e
 
     elapsed = round(time.time() - t0, 2)
     logger.info("文档重新分块成功 %s: %d 切片, %.2fs", doc.filename, len(chunks), elapsed)

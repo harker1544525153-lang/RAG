@@ -426,6 +426,10 @@ async function rebuildVectors() {
 }
 
 async function saveWeb() {
+  if (web.value.enabled && !system.value.tavily_key_configured) {
+    webMsg.value = '请先填写 Tavily Key 并保存，再开启联网搜索'
+    return
+  }
   webSaving.value = true
   webMsg.value = ''
   try {

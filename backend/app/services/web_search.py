@@ -20,13 +20,16 @@ def _cfg() -> dict:
     return settings_service.get_runtime()
 
 
-def search(question: str, max_results: int | None = None) -> list[dict]:
-    """调用 Tavily 搜索，返回 [{title, url, content}]；未配置 Key 时返回空。"""
+def search(question: str, max_results: int | None = None) -> tuple[list[dict], str | None]:
+    """调用 Tavily 搜索，返回 ({title, url, content} 列表, 失败原因)。
+
+    未配置 Key 或请求失败时返回空列表 + 中文原因，由调用方决定是否在回答中提示。
+    """
     cfg = _cfg()
     api_key = (cfg.get("tavily_api_key") or "").strip()
     if not api_key:
         logger.warning("未配置 Tavily API Key，联网搜索已跳过（可在管理端「设置」填写）")
-        return []
+        return [], "未配置 Tavily API Key"
 
     base_url = (cfg.get("tavily_base_url") or settings.TAVILY_BASE_URL).rstrip("/")
     payload = {
@@ -42,9 +45,9 @@ def search(question: str, max_results: int | None = None) -> list[dict]:
         resp = httpx.post(f"{base_url}/search", json=payload, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
-    except Exception as e:  # 网络/额度/Key 错误均降级为「不联网」
+    except Exception as e:  # 网络/额度/Key 错误均降级为「不联网」，但把原因带回给问答
         logger.warning("Tavily 联网搜索失败：%s", e)
-        return []
+        return [], _friendly(e)
 
     results = []
     for item in data.get("results", []):
@@ -59,4 +62,19 @@ def search(question: str, max_results: int | None = None) -> list[dict]:
             }
         )
     logger.info("Tavily 联网搜索完成：%d 条结果", len(results))
-    return results
+    return results, None
+
+
+def _friendly(exc: Exception) -> str:
+    """把常见联网失败原因转成中文提示。"""
+    text = str(exc)
+    low = text.lower()
+    if "401" in text or "unauthorized" in low or "api key" in low or "invalid api key" in low:
+        return "Tavily Key 无效或未授权，请检查「设置 → 联网搜索」中的 Key"
+    if "429" in text or "rate limit" in low or "quota" in low:
+        return "Tavily 请求过于频繁或额度用尽，请稍后重试"
+    if "timeout" in low or "timed out" in low:
+        return "Tavily 请求超时，请检查网络后重试"
+    if "connect" in low or "network" in low or "dns" in low:
+        return "无法连接 Tavily 服务，请检查网络或接口地址"
+    return text[:200]

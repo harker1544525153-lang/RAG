@@ -55,11 +55,14 @@ def build_context(hits: list[dict], question: str = "") -> tuple[str, list[dict]
 
 def append_web_results(
     question: str, context: str, sources: list[dict], max_results: int | None = None
-) -> tuple[str, list[dict]]:
-    """联网时把 Tavily 结果追加为额外上下文（来源标记为 type=web）。"""
-    hits = web_search.search(question, max_results=max_results)
+) -> tuple[str, list[dict], str | None]:
+    """联网时把 Tavily 结果追加为额外上下文（来源标记为 type=web）。
+
+    返回 (新上下文, 来源, 失败原因)；失败原因用于在回答中提示用户。
+    """
+    hits, error = web_search.search(question, max_results=max_results)
     if not hits:
-        return context, sources
+        return context, sources, error
 
     parts = []
     base = len(sources)
@@ -82,7 +85,7 @@ def append_web_results(
         )
     web_text = "【联网搜索结果】\n" + "\n\n".join(parts)
     merged = f"{context}\n\n{web_text}" if context else web_text
-    return merged, sources
+    return merged, sources, None
 
 
 def retrieve(
@@ -113,16 +116,19 @@ def stream_answer(
     context, sources = retrieve(question, top_k=top_k, threshold=threshold)
 
     need_web = web_search_enabled and (web_search_mode == "always" or not context)
+    web_error = None
     if need_web:
-        context, sources = append_web_results(question, context, sources, web_max_results)
+        context, sources, web_error = append_web_results(
+            question, context, sources, web_max_results
+        )
 
     yield {"type": "sources", "sources": sources}
 
     if not context:
-        yield {
-            "type": "token",
-            "content": "知识库中未查询到相关内容，请换一种问法，或补充相关文档后再试。",
-        }
+        msg = "知识库中未查询到相关内容，请换一种问法，或补充相关文档后再试。"
+        if web_error:
+            msg += f"\n\n（联网检索未成功：{web_error}）"
+        yield {"type": "token", "content": msg}
         yield {"type": "done"}
         return
 
@@ -131,6 +137,11 @@ def stream_answer(
     try:
         for token in stream_chat(question, context, temperature=temperature):
             yield {"type": "token", "content": token}
+        if web_error:
+            yield {
+                "type": "token",
+                "content": f"\n\n> 联网检索未成功：{web_error}，以上回答仅基于知识库内容。",
+            }
         yield {"type": "done"}
     except RuntimeError as e:  # 未配置 API Key 等
         yield {"type": "error", "message": str(e)}

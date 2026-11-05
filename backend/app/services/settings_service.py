@@ -208,6 +208,9 @@ def refresh(db) -> dict:
 def _validate(cfg: dict) -> None:
     if cfg["chunk_overlap"] >= cfg["chunk_size"]:
         raise ValueError("分块重叠必须小于分块大小")
+    # 开启联网搜索前必须有 Tavily Key，否则保存直接失败（避免线上问答时才暴露）
+    if cfg["web_search_enabled"] and not (cfg.get("tavily_api_key") or "").strip():
+        raise ValueError("未配置 Tavily Key，请先填写 Tavily API Key 并保存后再开启联网搜索")
 
 
 def update(db, payload: dict) -> dict:
