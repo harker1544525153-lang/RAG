@@ -29,6 +29,17 @@ def _env_path(key: str, default: Path) -> Path:
 _IS_SERVERLESS = bool(os.getenv("VERCEL"))
 
 
+def _normalize_db_url(url: str) -> str:
+    """补全 Postgres driver：Neon/Supabase 控制台给的是 postgres:// 或 postgresql://，
+    默认会找 psycopg2；本项目安装的是 psycopg3，不补全会让 create_engine 直接抛
+    ImportError，导致 Vercel 全站 500。"""
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 class Settings:
     # ---------- 基础路径 ----------
     HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -47,7 +58,10 @@ class Settings:
     # ---------- 业务数据库 ----------
     # 本地：sqlite:///C:/xxx/backend/data/rag.db
     # 云端：postgresql+psycopg://USER:PASS@HOST/DB?sslmode=require
-    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'rag.db').as_posix()}")
+    # Neon/Supabase 原样复制过来的 postgres:// / postgresql:// 会被自动补成 +psycopg
+    DATABASE_URL: str = _normalize_db_url(
+        os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'rag.db').as_posix()}")
+    )
 
     # ---------- 向量库后端 ----------
     # auto：按 DATABASE_URL 自动选择（sqlite -> sqlite 内置向量表，postgres -> pgvector）
