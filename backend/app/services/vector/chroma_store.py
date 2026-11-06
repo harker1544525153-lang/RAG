@@ -33,7 +33,9 @@ class ChromaVectorStore:
                 ids=[c["id"] for c in part],
                 documents=[c["text"] for c in part],
                 metadatas=[c["metadata"] for c in part],
-                embeddings=embeddings.embed_documents([c["text"] for c in part]),
+                embeddings=embeddings.embed_documents(
+                    [c.get("embed_text") or c["text"] for c in part]
+                ),
             )
         logger.info("Chroma 已写入 %d 个切片", len(chunks))
 
@@ -42,14 +44,18 @@ class ChromaVectorStore:
         logger.info("Chroma 已删除文档 %s 的切片", doc_id)
 
     def search(
-        self, question: str, top_k: int | None = None, threshold: float | None = None
+        self,
+        question: str,
+        top_k: int | None = None,
+        threshold: float | None = None,
+        cfg: dict | None = None,
     ) -> list[dict]:
         total = self._collection.count()
         if not total:
             return []
         k = min(top_k or settings.TOP_K, total)
         result = self._collection.query(
-            query_embeddings=[embeddings.embed_query(question)],
+            query_embeddings=[embeddings.embed_query(question, cfg=cfg)],
             n_results=k,
             include=["documents", "metadatas", "distances"],
         )
@@ -64,6 +70,14 @@ class ChromaVectorStore:
         hits.sort(key=lambda h: h["similarity"], reverse=True)
         logger.info("Chroma 检索 '%s': 命中 %d 条", question[:30], len(hits))
         return hits
+
+    def all_chunks(self) -> list[dict]:
+        """全量切片（供 BM25 关键词检索建索引）。"""
+        data = self._collection.get(include=["documents", "metadatas"])
+        return [
+            {"id": cid, "text": text, "metadata": meta}
+            for cid, text, meta in zip(data["ids"], data["documents"], data["metadatas"])
+        ]
 
     def get_chunks(self, doc_id: str, limit: int = 100) -> list[dict]:
         data = self._collection.get(

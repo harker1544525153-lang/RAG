@@ -6,10 +6,12 @@
 
 | 端 | 访问路径 | 目录 | 定位 |
 |---|---|---|---|
-mingc | 用户端（GALA 智能问答助手） | `/` | `user/` | 可嵌入任意官网，普通访客直接提问，不暴露任何技术参数 |
+| 用户端（GALA 智能问答助手） | `/` | `user/` | 可嵌入任意官网；支持每账号专属免登录链接，访客直接提问，不暴露任何技术参数 |
 | 管理端（后台管理） | `/admin/` | `frontend/` | 上传文档、问答记录存档，以及**模型 / 检索参数配置** |
 
 - 大模型（Key / URL / 模型名 / 温度）、向量化模型、Tavily Key、检索与分块参数均可在管理端「设置 → 模型服务」修改，**保存后立即生效**；`backend/.env` 作为默认回退
+- **多账号隔离**：每个账号拥有独立的文档、分类、问答记录、模型 Key 与全部设置，互不读取、互不影响；管理员额外拥有「用户管理」「对话统计」权限
+- **每账号一个用户端链接**：`/user/index.html?at=<分享令牌>` 发给访客即可免登录问答，回答只使用该账号的文档与模型配置
 - 本地零成本运行、云端一键迁移：业务库与向量库共用同一套抽象，改一个连接串即可切换
 - 初始知识库随仓库提交，服务启动自动导入 `DOC/` 下的企业文档
 
@@ -26,11 +28,11 @@ RAG（Retrieval-Augmented Generation，检索增强生成）= **先查资料，�
 文档 PDF/DOCX/PPTX/TXT/MD
    │  ① 解析抽取
    ▼
-纯文本 ──② 清洗（去空白/乱码/过短片段）──▶ ③ 中文分块（600 字 / 重叠 120）
-   │                                            │
-   │                                     ④ 向量化（BGE → 512 维向量）
+纯文本 ──② 结构化清洗（去空白/乱码，保留标题/表格/代码结构）──▶ ③ 按分类策略分块
+   │                                            │  通用 512Token 基线｜制度语义｜Word 层级｜代码｜表格
+   │                                     ④ 向量化（BGE / OpenAI 兼容 / hash）
    ▼                                            ▼
-documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks（文本 + 向量 + 来源）
+documents 表（元数据、状态、分级标签）  ⑤ 写入向量表 vector_chunks（文本 + 向量 + 分级/时间/标签元数据）
 
 【链路 B · 问答（在线，每次提问执行）】
 用户问题
@@ -53,7 +55,7 @@ documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks�
 | 通用 RAG 步骤 | 本项目实现 | 关键文件 |
 |---|---|---|
 | 1. 加载文档 | 按扩展名分派解析器，WPS 异常 docx 自动回退 OOXML | `backend/app/services/parser.py` |
-| 2. 切割文本 | 递归分块，中文分隔符优先级 `\n\n → \n → 。！？ → ；， → 空格` | `backend/app/services/chunker.py` |
+| 2. 切割文本 | 按文档分类 + 文件类型选择策略：按 Token 数（目标 Token 换算字符）、基础标准（512 Token ≈ 768 字符 + 10%~15% 重叠）、语义分块（标题/条款边界）、段落结构（标题 + 段落，适配 Word/TXT）、按页切分（同页不跨页，适配 PDF/PPT）、层级分块（章节摘要 + 子块）、代码结构（函数/类边界）、表格结构（表头重复 + 行组）、流程结构（按「第 X 步 / ①」等步骤边界）。上传时选「**默认配置**」（默认项）则不指定分类：解析后按文档**实际内容**自动识别类型，PDF/PPT 按页码、Word/TXT 按段落标题、Markdown 按语义；分块大小/重叠取「设置」中的检索参数 | `backend/app/services/chunker.py`（策略配置见 `crud.DEFAULT_CATEGORIES`）、`backend/app/services/doc_classifier.py`（内容识别）、`backend/app/services/ingest.py` `resolve_strategy()`（文件类型兜底） |
 | 3. 向量化 | 本地 BGE（默认）／OpenAI 兼容 Embedding API／hash（离线联调） | `backend/app/services/embeddings.py` |
 | 4. 构建提示词 | `SYSTEM_PROMPT` 拼装检索上下文，强制引用与反幻觉 | `backend/app/services/llm.py` |
 | 5. 调用大模型 | OpenAI 兼容协议，`stream=True` 流式输出 | `backend/app/services/llm.py` 的 `stream_chat()` |
@@ -64,7 +66,7 @@ documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks�
 
 | 参数（`backend/.env`） | 影响的环节 | 改动后的后果 |
 |---|---|---|
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | A③ 分块 | 只对**新上传**文档生效；已入库切片不会自动重切 |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | A③ 分块 | 全局兜底：新建分类未配置参数、或分类参数为空时使用。常规配置请在「设置 → 模型服务 → 检索、分级与时间权重」中通过「文档类型」下拉逐类设置（默认配置上传时按识别出的类型取参数）；改后只对**新上传/重建**文档生效 |
 | `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | A④ 与 B① 向量化 | 换模型会改变向量维度，**必须清库重新导入** |
 | `TOP_K` | B② 检索 | 界面「参考来源」最多显示几条（默认 5） |
 | `SCORE_THRESHOLD` | B② 检索 | 低于阈值的切片被丢弃；设 `0` 等于不过滤，寒暄也会命中无关内容 |
@@ -88,7 +90,7 @@ documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks�
 | 向量化 | BAAI/bge-large-zh-v1.5（本地） | OpenAI 兼容 Embedding API（SiliconFlow / 智谱等） |
 | 生成 | 阿里云百炼 / DeepSeek（OpenAI 兼容协议） | 同左 |
 | 文档解析 | PyMuPDF / python-docx / python-pptx | 同左 |
-| 分块 | LangChain RecursiveCharacterTextSplitter（记录原文 `char_start` / `char_end`） | 同左 |
+| 分块 | 按分类选择策略：RecursiveCharacterTextSplitter（标准）+ 语义/层级/代码/表格结构化切分（记录原文 `char_start` / `char_end`） | 同左 |
 | 原文预览与引用定位 | mammoth（docx→HTML）/ markdown / python-pptx 按页渲染；召回后按问题关键词从切片中抽取细粒度 span，预览页按原格式高亮 | 同左 |
 
 > 可选：`VECTOR_BACKEND=chroma` 可切换为 ChromaDB 本地持久化向量库（需安装 chromadb）。
@@ -99,25 +101,55 @@ documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks�
 - 品牌名统一为 **GALA 智能问答助手**，专属 SVG logo（对话气泡），同时用于浏览器标签页 favicon
 - 单页极简聊天界面，可直接通过 `<iframe>` 嵌入官网任意位置
 - SSE 流式回答，逐字输出，带"参考来源"卡片（文件名 + 相似度；联网结果标注「联网」并可点击跳转原网页）
+- 顶部**检索范围条**：按业务模块 / 适用场景限定检索（选项来自文档结构化元数据），管理端身份下额外显示权限范围；来源卡片展示文档类型、数据分级（核心权威 / 普通参考 / 过期归档）、章节、生效日期与**综合相关度**（相似度 × 分级 × 时间 × 重要度）
 - 聊天窗口默认居中；**点击回答正文中的 `[n]`（或来源卡片文件名）时才展开右侧文档面板**，并按导入时的原格式渲染（Word 保留文档结构、Markdown 渲染标题/列表/表格、PPT 按页、TXT 保留排版、PDF 用内置阅读器），自动滚动并**精准高亮支撑该回答的原文句子**（切片入库时保存字符偏移，召回后再按问题关键词挑出细粒度 span 绑定引用，不再整段切片定位）
 - 点击不同序号可在右侧切换文档与定位片段；不再提供「打开原文」入口（窄屏下面板全屏显示，可点 × 收起，收起后恢复居中）
-- 无需登录、无模型/参数配置项，访客打开即用
-- 每个访客自动生成独立会话，全部落库供管理端查看
+- **每账号一个专属链接**：`/user/index.html?at=<分享令牌>`，访客免登录打开，问答与检索只使用该账号的文档和模型 Key，A 账号链接与 B 账号链接互不影响
+- 身份优先级：`?at=`（账号分享令牌）> `?token=`（管理端 iframe 透传的当前登录令牌）> 浏览器登录态；带参数的页面**不回写** `localStorage`，避免覆盖后台登录状态
+- 无链接参数且未登录的访客（如直接访问 `/`）使用站点默认配置
+- 无模型/参数配置项，访客打开即用；会话记录到链接所属账号（未登录访客记为站点默认账号），可在管理端「问答记录」查看
+
+### 账号体系 · 注册与登录（`frontend/src/views/AuthView.vue`）
+- 管理后台整体封装为一套独立系统：未登录时只显示登录 / 注册页，登录后才进入后台
+- **注册**：手机号 + 密码 + 图形验证码（昵称选填），注册即登录；**登录**：手机号 + 密码 + 图形验证码
+- 图形验证码为后端生成的 SVG（4 位字符，5 分钟有效、一次性），点击图片即可换一张，无需短信服务
+- 登录态为无状态签名令牌（默认 7 天，`Authorization: Bearer`），浏览器本地保存；令牌失效或账号被禁用会自动回到登录页
+- 默认管理员账号：`DEFAULT_ADMIN_PHONE`（默认 `13800000000`）/ `DEFAULT_ADMIN_PASSWORD`（默认 `admin123`），仅在用户表为空时自动创建，**部署后请立即修改**
+- **权限差异**：所有登录用户可使用「智能问答助手 / 文档管理 / 问答记录 / 设置」；仅 `admin` 额外拥有「用户管理」「对话统计」。管理员可管理任意账号（编辑资料、重置密码、禁用、删除、生成用户端链接），但不能禁用 / 降级 / 删除自己，系统至少保留一个可用管理员
+- **多账号数据隔离**：`categories` / `documents` / `chat_sessions` / `qa_categories` / `user_settings` 均按 `user_id` 归属，所有查询与写入强制带当前账号；跨账号访问会话明确返回 404；新注册账号只生成自己的默认分类与问答分类，不复制其他账号的文档、会话与 Key
+- **登录态同步**：令牌存 `localStorage`，同一浏览器其他标签页切换账号会触发 `storage` 事件，后台自动按新令牌重载数据，避免「界面显示 A 账号、请求却带 B 账号令牌」
+- **用户端分享链接**：每个账号可生成免登录链接（见上节）；分享令牌带 `scope=widget`，10 年有效，仅能问答与读取品牌配置，调用管理接口一律 403
+- 用户端（`/`）本身免登录，链接地址由账号体系生成
+
+### 管理端 · 用户管理（`frontend/src/views/UsersView.vue`，仅管理员）
+- 账号列表：昵称 / 手机号、角色、状态、登录次数、最近登录、注册时间
+- 搜索手机号或昵称，按角色（普通用户 / 管理员）、状态（正常 / 已禁用）筛选，分页浏览
+- 可执行操作：编辑昵称与角色、重置密码、禁用 / 启用账号、删除账号、查看登录记录（成功 / 失败原因、IP、时间）、**复制该账号的用户端问答链接**（免登录，按该账号的文档与模型配置回答）
+- 安全约束：不能禁用、降级或删除当前登录账号；系统至少保留一个可用管理员
+- 所有登录与注册尝试均写入 `user_login_logs`（含失败原因），便于排查异常登录
+
+### 管理端 · 对话统计（`frontend/src/views/StatsView.vue`，仅管理员）
+- 支持近 7 / 30 / 90 天切换
+- 统计卡片：会话总数（用户端 / 管理端拆分）、提问总数（含总消息数）、注册用户数、活跃访客数
+- 使用趋势：按日展示会话数与提问数的柱状图
+- 会话来源分布、问答分类分布（Top 10，颜色与问答分类一致）
+- 热门提问：近 N 天重复次数最高的 8 个问题，用于了解用户真实关注点
 
 ### 管理端 · 智能问答助手（`frontend/src/App.vue`）
-- 侧边栏首个入口，内嵌用户端聊天页（`/user/index.html?source=admin`），管理员可在后台直接试问
-- 与用户端共用同一套问答链路，但请求走 `/api/chat`，会话来源记为 **管理**（访客名「管理员」），会出现在「问答记录」中
+- 侧边栏首个入口，内嵌用户端聊天页（`/user/index.html?source=admin&token=<当前登录令牌>`），登录用户可在后台直接试问
+- 与用户端共用同一套问答链路，但请求走 `/api/chat`，会话来源记为 **管理**，并按**当前登录账号**归属（文档、分类、问答记录都是该账号自己的数据）
+- iframe 地址随当前账号令牌变化，切换账号后按新地址重建（`:key="user.id"`），不会沿用上一个账号的页面与登录态
 - 打开方式：`/admin/` 点击左侧「智能问答助手」，或直接访问 `/admin/?tab=assistant`
 
 ### 管理端 · 文档管理（`frontend/src/views/DocumentsView.vue`）
-- 拖拽或点击上传：PDF / DOCX / PPTX / TXT / Markdown
+- 拖拽或点击上传：PDF / DOCX / PPTX / TXT / Markdown / 常见代码文件（.py/.js/.ts/.sql/.json/.yml 等）
+- 上传前弹出**元数据配置弹窗**：先选文件，再选分类（**默认选中「默认配置」**：不指定分类，解析后按文档实际内容自动识别，块大小/重叠取该文档类型在「设置 → 按文档类型的分块参数」中的配置；也可手动选具体分类，此时按该分类的分块策略与块大小切分）、数据分级（展示权重与 `综合得分 = 相似度 × 分级权重 × 时间衰减 × 重要度` 公式）、结构化标注（模块/场景/权限/有效期逐项说明），确认后才解析入库；上传时设置**分类（决定分块策略）、数据分级（核心权威/普通参考/过期归档）、业务模块、适用场景、权限范围、生效/过期日期、重要度**
 - 上传进度、处理状态（处理中 / 已就绪 / 失败，失败可见原因）
-- 列表展示：类型、大小、切片数、分类、上传时间
-- 按文件名搜索、按分类/状态筛选
-- 切片预览（查看分块原文与序号）
-- 行内修改分类、删除文档（同步清除向量切片）
-- 顶部统计：文档数 / 切片数 / 存储占用 / 处理状态分布
-- 一键导入 `DOC/` 初始文档（按文件哈希去重）
+- 列表展示：类型、切片数、分类与分块策略（自动识别的文档带「自动」标记）、分级、模块/场景标签、有效区间、更新时间
+- 按文件名搜索，按分类 / 状态 / 分级筛选
+- 切片预览（查看分块原文、序号、章节、Token 数）
+- 每行「设置」打开**设置弹窗**（与上传弹窗完全一致的 ①②③ 分区、切分信息条、分类卡片网格与公式条），分类卡片首项为「默认配置（按内容识别，取该类型的分块参数）」；保存后按新配置重建切片；另可仅重建切片、删除文档（同步清除向量切片）
+- 顶部统计：文档数 / 切片数 / 存储占用 / 处理状态分布 / 分级分布
 
 ### 管理端 · 问答记录（`frontend/src/views/SessionsView.vue`）
 - 统计卡片：总会话、用户端会话、管理端会话、总消息数
@@ -131,16 +163,19 @@ documents 表（元数据、状态）        ⑤ 写入向量表 vector_chunks�
 > 分类规则位于 `backend/app/services/category_service.py`：按分类的 `sort_order`（越小优先级越高）逐类匹配关键词，命中即返回，保证一个问题只归一类。分类数据存于 `qa_categories` 表，可在管理端「设置」中增删改；历史会话在服务启动时自动补齐分类（`crud.backfill_session_categories`），删除某分类时其历史会话自动回落到「其他」。
 
 ### 管理端 · 设置（`frontend/src/views/SettingsView.vue`）
-顶部为横向子标签：**模型服务 / 联网搜索 / 文档分类 / 问答分类 / 系统信息**，一次只显示一页，避免内容过长。
+顶部为横向子标签：**模型服务 / 联网搜索 / 文档分类 / 问答分类 / 信息分类 / 系统信息**，一次只显示一页，避免内容过长。
 - **模型服务（核心）**：四组表单，保存后立即生效，无需重启
   - 大模型：API Key、Base URL、模型名、温度；内置「阿里云百炼 / DeepSeek / 硅基流动」快捷填充，也可填任意 OpenAI 兼容厂商
   - 向量化：方式（local / openai / hash）、接口地址、模型名、专用 Key（留空自动复用大模型 Key）、本地模型名、批量大小
   - 联网搜索：Tavily API Key 与接口地址
-  - 检索与分块：分块大小、重叠、召回条数、相似度阈值
-  - 密钥输入框为密码类型，**默认回显系统已有的 Key**（管理端保存过的优先，其次 `backend/.env`，都没有则为空）；可直接改后保存，**清空后保存即删除该 Key**（对应模型调用会因缺 Key 而失败）
+  - 检索与分块：分块大小、重叠（作为新建分类/未配置分类的全局兜底）、召回条数、相似度阈值
+  - **按文档类型的分块参数**：检索模块最上方新增「文档类型」下拉（默认「默认设置」），选择具体类型后，同组的「分块策略 / 分块大小 / 分块重叠」字段即切换为该类型的当前值（块大小与重叠复用原有字段，不再重复渲染），默认设置对应全局兜底参数；下方只读汇总表展示各类型参数，默认值为 通用 768/96、Word 768/96、制度 768/120、代码 1200/120、表格 768/0、流程 768/96；保存后文档管理的上传弹窗与「文档设置」弹窗同步显示
+  - 分级与时间权重：核心权威 / 普通参考 / 过期归档权重、时间权重半衰期与下限、是否过滤过期文档（`rag._rank_hits` 按 `相似度 × 分级 × 时间 × 重要度` 重排）
+  - 密钥输入框为密码类型，**默认回显当前账号已保存的 Key**（本账号设置优先，其次 `backend/.env` 默认值，都没有则为空）；可直接改后保存，**清空后保存会直接删除数据库中的该密钥记录**（不留空行，对应模型调用因缺 Key 失败）；其他账号既看不到、也无法使用本账号的 Key
 - **联网搜索（Tavily）**：开 / 关、搜索时机（`always` 每次提问都联网 / `fallback` 仅本地知识库未命中时联网）、返回网页条数（1~10）；保存后立即生效
-- **文档分类（知识库）**：编辑分类名称、颜色、说明，支持新增/删除；删除某分类会把其下文档变为「未分类」。与「问答分类」是两套独立体系
+- **文档分类（知识库）**：编辑分类名称、颜色、说明，支持新增/删除；分块策略 / 块大小 / 重叠在此只读展示，编辑统一在「模型服务 → 检索、分级与时间权重」的「文档类型」下拉中完成。删除某分类会把其下文档变为「未分类」。与「问答分类」是两套独立体系。修改策略后已有文档需在文档管理页点「仅重建切片」生效
 - **问答分类**：表格化编辑顺序（优先级）、名称、颜色、关键词、启用状态，支持新增与删除；「其他」为兜底分类，不可删除
+- **信息分类**：分别编辑「管理后台」与「用户端」的品牌名称、副标题、Logo（PNG / JPG / SVG / WEBP，≤ 2MB，上传后立即生效，可一键恢复默认），按账号独立保存；同一面板提供**当前账号的用户端问答链接**（只读输入框 + 复制按钮），发给访客即可免登录问答，也可在「用户管理」为其他账号生成
 - **系统信息（只读）**：当前生效的大模型 / 接口地址 / 向量化方式与模型、数据库、向量库后端、各类 Key 是否已配置、单文件上限与数据目录
 - **重建向量索引**：修改向量化方式/模型名或分块大小/重叠后，点「保存模型与检索配置」会**自动按新配置重新切片并向量化全部文档**（`PUT /api/settings`）；重建失败时返回具体原因（前端提示「保存失败：重建文档分块失败（文件名：原因）」），可修正后重试或点「立即重建向量索引」（`POST /api/settings/rebuild-vectors`）
 
@@ -165,25 +200,30 @@ RAG/
 │   └── app/
 │       ├── main.py                   # FastAPI 入口（建表/初始导入/双端静态托管/端口预检/预热）
 │       ├── config.py                 # 全部可配置项（.env 默认值集中在此）
-│       ├── models.py                 # ORM 模型（分类/文档/会话/消息/设置，文档含 preview_html）
-│       ├── db.py                     # SQLAlchemy 引擎（SQLite / PostgreSQL）+ 旧表补列迁移
-│       ├── crud.py                   # 数据访问层
+│       ├── models.py                 # ORM 模型（users / categories / documents / chat_sessions / user_settings 等，均按 user_id 归属）
+│       ├── db.py                     # SQLAlchemy 引擎（SQLite / PostgreSQL）+ 旧表补列迁移（_ensure_columns）+ 存量数据回填管理员
+│       ├── crud.py                   # 数据访问层（读写按 user_id 隔离，空值设置直接删行）
+│       ├── security.py               # 密码哈希、登录令牌 / 用户端分享令牌（scope=widget）、鉴权依赖
 │       ├── routers/
-│       │   ├── documents.py          # 上传/列表/切片/原文预览（/doc/{id} 按原格式渲染并高亮引用片段）/改分类/删除/统计
-│       │   ├── knowledge.py          # 分类管理 + 知识库总览
-│       │   ├── chat.py               # SSE 问答 + 会话（含 /api/public/chat 用户端入口）
+│       │   ├── auth.py               # 注册 / 登录 / 图形验证码 / 当前用户 / 退出
+│       │   ├── users.py              # 用户管理（列表/详情/角色/重置密码/禁用/删除）+ 对话统计 + 用户端链接
+│       │   ├── documents.py          # 上传（含分级/标签/有效期）/列表（分级/模块/场景/权限过滤）/切片/原文预览（/doc/{id} 按原格式渲染并高亮引用片段）/改分类与元数据/仅重建切片/删除/统计
+│       │   ├── knowledge.py          # 分类管理（含分块策略）+ 检索范围选项（/api/knowledge/filters）+ 知识库总览
+│       │   ├── chat.py               # SSE 问答 + 会话（按当前账号隔离；含 /api/public/chat 用户端入口）
 │       │   ├── qa_categories.py      # 问答归档分类增删改（设置模块使用）
-│       │   └── settings.py           # 运行时设置（分块/向量化变化时保存即重建切片）+ 初始导入
+│       │   └── settings.py           # 当前账号设置（分块/向量化变化时保存即重建切片）+ 品牌 Logo + 用户端链接 + 初始导入
 │       └── services/
 │           ├── parser.py             # 解析清洗（docx 非法包自动回退 OOXML）
-│           ├── chunker.py            # 递归分块，并记录每段在原文中的 char_start / char_end
+│           ├── chunker.py            # 六类分块策略（standard/semantic/hierarchical/code/table/flow），记录原文 char_start / char_end
+│           ├── doc_classifier.py     # 「默认配置」按文档实际内容识别分类（代码/表格/流程/制度/长文档各自独立评分）
 │           ├── doc_preview.py        # 原文件渲染 HTML（docx / markdown / pptx / txt，超大图片转占位）
 │           ├── span.py               # 从召回切片中挑出真正支撑回答的细粒度原文句子（span）
+│           ├── bm25.py               # BM25 关键词召回，与向量召回在 rag 层用 RRF 融合
 │           ├── embeddings.py         # 向量化：local / openai / hash（客户端复用）
 │           ├── vector/               # 向量库抽象：sqlite / pgvector / chroma（切片、字符偏移、向量）
 │           ├── ingest.py             # 入库流水线（失败回滚）+ 单篇重切 / 全量重建索引
 │           ├── seed.py               # DOC 初始文档自动导入
-│           ├── rag.py                # 检索 → 上下文（统一引用编号 + 绑定 span）→ 流式生成 → 兜底文案
+│           ├── rag.py                # 检索 → 元数据过滤 + 分级/时间权重重排 → 上下文（统一引用编号 + 绑定 span）→ 流式生成 → 兜底文案
 │           ├── llm.py                # LLM 客户端（连接复用）+ 系统提示词（模型/Key 读运行时配置）
 │           ├── web_search.py         # Tavily 联网搜索（未配 Key 自动跳过）
 │           ├── category_service.py   # 问答自动归档分类（DB 驱动，支持增删改）
@@ -194,10 +234,10 @@ RAG/
 │   ├── dist/                         # 构建产物（npm run build 生成）
 │   └── src/
 │       ├── main.js                   # Vue 入口
-│       ├── App.vue                   # 左侧导航 + 模块容器（智能问答助手 / 文档管理 / 问答记录 / 设置）
-│       ├── api.js                    # 统一请求封装
+│       ├── App.vue                   # 左侧导航 + 按账号渲染模块；未登录显示登录页；内嵌用户端 iframe 随账号切换
+│       ├── api.js                    # 统一请求封装（自动附加令牌、401/403 统一处理）
 │       ├── style.css                 # 蓝色企业主题变量
-│       └── views/                    # DocumentsView.vue / SessionsView.vue / SettingsView.vue
+│       └── views/                    # AuthView.vue / DocumentsView.vue / SessionsView.vue / SettingsView.vue / UsersView.vue / StatsView.vue
 ├── user/
 │   └── index.html                    # 用户端单文件：默认居中；点击引用 [n] 展开右侧原格式文档并精准高亮
 ├── DOC/                              # 本地初始知识库（已被 .gitignore/.vercelignore 排除，不提交/不上云；本地启动自动导入）
@@ -220,14 +260,15 @@ RAG/
 
 | 层级 | 位置 | 改后如何生效 |
 |---|---|---|
-| 运行时设置（**大模型 / 向量化 / Tavily Key / 检索与分块 / 联网开关 / 分类**） | 管理端「设置 → 模型服务」→ 存 `app_settings` / `qa_categories` | **保存即生效**；分块大小/重叠或向量化配置变更时，保存会**自动重建全部文档切片**，失败会提示具体原因 |
+| 运行时设置（**大模型 / 向量化 / Tavily Key / 检索与分块 / 分级与时间权重 / 联网开关 / 分类**） | 管理端「设置 → 模型服务」→ 存 `user_settings` / `qa_categories`（按当前账号） | **保存即生效**；分块大小/重叠或向量化配置变更时，保存会**自动重建当前账号的全部文档切片**，失败会提示具体原因 |
 | 环境变量（端口、数据库、向量库、HuggingFace 离线…） | `backend/app/config.py`（每项均有注释）+ `backend/.env.example`（分组说明） | 复制为 `backend/.env` 修改后**重启后端** |
+| 系统账号（`AUTH_SECRET`、`TOKEN_TTL_DAYS`、默认管理员手机号 / 密码） | `backend/app/config.py` + `backend/.env.example` | 修改后**重启后端**；`AUTH_SECRET` 未设置时自动生成并保存到 `data/.auth_secret`，重启后登录态不失效 |
 | Prompt、兜底文案、业务常量 | `backend/app/services/llm.py`（`SYSTEM_PROMPT`）、`rag.py` | **重启后端** |
 | 前端页面与样式 | 用户端 `user/index.html`（HTML/CSS/JS 单文件）；管理端 `frontend/src/` | 用户端刷新页面；管理端需 `npm run build` |
 
 > 完整环境变量清单与作用说明见 `backend/.env.example` 与 `backend/app/config.py` 的注释。
 >
-> **优先级**：管理端保存的值（`app_settings` 表）> `backend/.env` 默认值。设置页会回显密钥的**当前生效值**（管理端保存过优先，否则取 `.env`），未配置时为空，方便确认已有 Key 并直接修改。
+> **优先级**：当前账号在管理端保存的值（`user_settings` 表）> `backend/.env` 默认值。设置页会回显**本账号**已保存的密钥（未保存过则取 `.env`，都没有为空），方便确认已有 Key 并直接修改；其他账号看不到本账号的 Key，也无法借用。
 
 > **默认不带任何 Key**：`backend/.env` 与 `.env.example` 中的密钥均为空值，首次启动后需在管理端「设置 → 模型服务」填写大模型 Key（向量化 Key 可留空复用）；未填写时问答会提示缺少 Key。
 
@@ -330,12 +371,12 @@ SYSTEM_PROMPT = """你只能使用下面参考上下文回答问题，禁止编�
 ```
 每次提问 → settings_service.get_runtime()
               ├─ 启动时读 .env 默认值（LLM / EMBEDDING / TAVILY / TOP_K / CHUNK…）
-              └─ 再用 app_settings 表里的同名值覆盖
+              └─ 再用当前账号 user_settings 表里的同名值覆盖
 ```
 
 - **管理端保存值优先于 `.env`**。在「设置 → 模型服务」保存后，运行时会立即刷新；`.env` 只在未保存过该项时生效。
-- 覆盖范围：大模型（Key / Base URL / 模型名 / 温度）、向量化（方式 / 地址 / 模型 / Key / 批量）、Tavily（Key / 地址）、检索与分块（`TOP_K` / `SCORE_THRESHOLD` / `CHUNK_SIZE` / `CHUNK_OVERLAP`）、联网开关。
-- `CHUNK_SIZE` / `CHUNK_OVERLAP` 影响**新上传**的文档；已入库切片要在设置页改分块参数并保存（保存时会自动按新参数重切并重建向量），或点「立即重建向量索引」/重新上传。
+- 覆盖范围：大模型（Key / Base URL / 模型名 / 温度）、向量化（方式 / 地址 / 模型 / Key / 批量）、Tavily（Key / 地址）、检索与分块（`TOP_K` / `SCORE_THRESHOLD` / `CHUNK_SIZE` / `CHUNK_OVERLAP`）、按文档类型的分块参数（各分类的 `strategy` / `chunk_size` / `chunk_overlap`）、分级与时间权重（三档权重 / 半衰期 / 下限 / 是否过滤过期）、联网开关。
+- `CHUNK_SIZE` / `CHUNK_OVERLAP` 是分类未单独配置时的全局兜底，实际按该文档类型的分类参数切割；已入库切片要在设置页改分块参数并保存（保存时会自动重切并重建向量），或在文档管理页点「仅重建切片」。
 - 密钥字段默认回显当前生效值（管理端保存值 > `.env`，都没有为空）；**清空并保存即删除该项 Key**（会覆盖 `.env` 默认值，未改动的密钥不会被重置）。
 
 #### Prompt 改了，为什么回复还是老样子？
@@ -527,8 +568,8 @@ INFO app.services.seed: 初始知识库导入完成：扫描 2，导入 2，跳�
 
 | 端 | 地址 | 说明 |
 |---|---|---|
-| 用户端智能客服 | http://localhost:8080/ | 可直接体验问答，也可 iframe 嵌入官网 |
-| 管理端后台 | http://localhost:8080/admin/ | 上传文档、查看问答记录 |
+| 用户端智能客服 | http://localhost:8080/ | 可直接体验问答，也可 iframe 嵌入官网；每账号还有独立的 `/user/index.html?at=<分享令牌>` 免登录链接 |
+| 管理端后台 | http://localhost:8080/admin/ | 上传文档、查看问答记录；首次登录用默认管理员 `13800000000 / admin123`（登录后立即在「用户管理」修改） |
 | 管理端（开发模式） | http://localhost:8081/admin/ | 端口从 `.env` 的 `PORT` 起步，被后端占用时顺延；接口代理到后端 |
 | 健康检查 | http://localhost:8080/api/health | 返回数据库/向量后端/文档数/切片数 |
 
@@ -602,7 +643,7 @@ EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 
 | 数据 | 存放位置 | 说明 |
 |---|---|---|
-| **业务数据库** | `backend/data/rag.db` | SQLite 单文件，含分类、文档元数据、会话、消息、设置 |
+| **业务数据库** | `backend/data/rag.db` | SQLite 单文件，含账号、按账号归属的分类/文档/会话/消息/设置 |
 | **向量数据** | 同上 `backend/data/rag.db` 的 `vector_chunks` 表 | `VECTOR_BACKEND=sqlite` 时向量与业务数据同库，便于整体备份 |
 | 上传的原始文件 | `backend/data/uploads/` | 按文档 ID 命名保存 |
 | Chroma 向量库（可选） | `backend/data/chroma/` | 仅 `VECTOR_BACKEND=chroma` 时使用 |
@@ -612,13 +653,16 @@ EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 
 | 表名 | 内容 |
 |---|---|
-| `categories` | 知识库分类 |
-| `documents` | 文档元数据（文件名、状态、切片数、大小、分类、哈希） |
-| `vector_chunks` | 切片文本 + 向量（SQLite 向量后端） |
-| `chat_sessions` | 会话（标题、来源 admin/user、归档分类、访客名、时间） |
+| `users` | 账号（手机号、密码哈希、昵称、角色 `admin`/`user`、禁用状态、登录次数、最近登录） |
+| `user_login_logs` | 登录 / 注册尝试记录（成功或失败、原因、IP、时间） |
+| `categories` | 知识库分类（**归属 `user_id`**、名称、颜色、分块策略 strategy、块大小 chunk_size、重叠 chunk_overlap） |
+| `documents` | 文档元数据（**归属 `user_id`**、文件名、状态、切片数、大小、分类、哈希，以及 **tier 分级、importance 重要度、doc_type、module 业务模块、scenario 适用场景、visibility 权限范围、effective_date / expire_date 有效期、auto_category 是否按内容自动识别分类**） |
+| `vector_chunks` | 切片文本 + 向量 + `meta`（章节、分块策略、Token 数、原文 char_start/char_end，以及随切片写入的分级/标签/有效期，供检索加权与过滤）；检索时按当前账号的 `doc_ids` 过滤 |
+| `chat_sessions` | 会话（**归属 `user_id`**、标题、来源 admin/user、归档分类、访客名、时间） |
 | `chat_messages` | 问答消息（问题、回答、引用来源 JSON） |
-| `qa_categories` | 问答归档分类（名称、颜色、关键词、优先级、启用） |
-| `app_settings` | 运行时参数覆盖（如 `top_k`、`web_search_enabled`） |
+| `qa_categories` | 问答归档分类（**主键 `(user_id, id)`**、名称、颜色、关键词、优先级、启用） |
+| `user_settings` | **每个账号自己的运行时设置（主键 `(user_id, key)`）**；Key 清空保存会删除对应行，不残留空记录 |
+| `app_settings` | 旧版全局配置；升级后仅作历史兜底，新逻辑一律按账号写入 `user_settings` |
 
 ### 本地数据库在哪配置
 
@@ -734,7 +778,7 @@ git push origin main   # Vercel 自动重新部署
 若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否为空。
 若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否为 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
 
-首次进入管理端 →「设置」填写 Key（默认均为空，保存即写入数据库，无需重新部署）：
+首次进入管理端需先用默认管理员账号登录（`DEFAULT_ADMIN_PHONE` / `DEFAULT_ADMIN_PASSWORD`，默认 `13800000000 / admin123`，登录后立即在「用户管理」重置），再进入「设置」填写 Key。Key 按账号独立保存，保存即写入数据库，无需重新部署：
 
 | 配置 | 位置 | 说明 |
 |---|---|---|
@@ -752,27 +796,49 @@ git push origin main   # Vercel 自动重新部署
 
 ## 核心 API
 
+> 除 `/api/health`、`/api/auth/*`、`/api/public/chat`、`/api/chat`、`/api/knowledge/filters`、`/api/settings/brand` 与 `/doc/{id}` 外，其余接口都需登录令牌（请求头 `Authorization: Bearer <token>`）；所有数据接口只返回**令牌所属账号**的数据，跨账号访问返回 404；用户管理接口额外要求 `role=admin`。
+>
+> 用户端分享令牌（`?at=`）的 payload 带 `scope=widget`，`/api/public/chat`、`/api/chat`、`/api/knowledge/filters`、`/api/settings/brand` 可用；调用其余管理接口一律返回 403（该链接仅用于问答，不能进后台）。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/auth/captcha` | 获取图形验证码（`captcha_id` + SVG，5 分钟一次有效） |
+| POST | `/api/auth/register` | 注册（手机号 + 密码 + 图形验证码 + 昵称），返回登录令牌 |
+| POST | `/api/auth/login` | 登录（手机号 + 密码 + 图形验证码），返回登录令牌与用户信息 |
+| GET | `/api/auth/me` | 当前登录用户（令牌无效返回 401） |
+| POST | `/api/auth/logout` | 退出登录（前端清除本地令牌） |
+| GET | `/api/users` | 用户列表（管理员；`keyword` / `role` / `disabled` / `page` / `page_size`） |
+| GET | `/api/users/{id}` | 用户详情 + 最近 50 条登录记录（管理员） |
+| PATCH | `/api/users/{id}` | 修改昵称 / 角色 / 禁用状态（管理员） |
+| POST | `/api/users/{id}/reset-password` | 重置用户密码（管理员） |
+| DELETE | `/api/users/{id}` | 删除账号（管理员；历史对话记录保留） |
+| GET | `/api/users/{id}/widget-link` | 为指定账号生成用户端问答链接（管理员；返回 `token` + `url`） |
+| GET | `/api/stats/chat` | 对话统计（管理员；`days=7/30/90`） |
 | GET | `/api/health` | 健康检查（数据库/向量后端/文档数/切片数） |
-| POST | `/api/documents/upload` | 上传文档（multipart，可带 `category_id`） |
-| GET | `/api/documents` | 文档列表（`category_id`/`status`/`keyword`） |
-| GET | `/api/documents/stats` | 统计（数量/切片/存储/类型分布/分类分布） |
-| GET | `/api/documents/{id}/chunks` | 切片预览 |
+| POST | `/api/documents/upload` | 上传文档（multipart：文件 + `category_id`（决定分块策略；**留空 = 默认配置，按内容自动识别**）+ `tier`/`importance`/`module`/`scenario`/`visibility`/`effective_date`/`expire_date`）；返回体含 `auto_category` 与识别出的 `category_name` |
+| GET | `/api/documents` | 文档列表（`category_id`/`status`/`keyword`/`tier`/`module`/`scenario`/`visibility`） |
+| GET | `/api/documents/stats` | 统计（数量/切片/存储/类型分布/分类分布/分级分布） |
+| GET | `/api/documents/strategy-preview` | 上传前预览实际切分方式（`filename` + 可选 `category_id`）：返回 `strategy` / `strategy_label` / `strategy_boundary`（边界依据）/ `size_unit` / `chunk_size` / `chunk_overlap` / `source`（`auto` 或 `category`） |
+| GET | `/api/documents/{id}/chunks` | 切片预览（含章节 section、分块策略、Token 数） |
 | GET | `/api/documents/{id}/file` | 下载文档原文件（PDF 预览也走此接口） |
-| PATCH | `/api/documents/{id}` | 修改文件名/分类 |
+| PATCH | `/api/documents/{id}` | 修改文件名 / 分类（按新策略重建切片）/ 分级 / 重要度 / 业务模块 / 适用场景 / 权限范围 / 生效与过期日期；传 `auto_category: true` 表示切回「默认配置」，清空分类并按内容重新识别 |
+| POST | `/api/documents/{id}/rebuild` | 仅重建该文档切片（分类或分块策略调整后手动触发） |
 | DELETE | `/api/documents/{id}` | 删除文档与向量 |
 | GET | `/doc/{doc_id}?chunk=N&span=S&span_len=L&embed=1` | 文档预览页：按原文件格式渲染整篇文档（Word / PPT / Markdown / TXT / PDF），滚动并精准高亮第 N 个切片中偏移 S、长度 L 的引用句子（缺省回退整段锚点）；`embed=1` 为问答页右侧内嵌的紧凑模式 |
-| GET/POST | `/api/categories` | 分类列表 / 新建 |
-| PATCH/DELETE | `/api/categories/{id}` | 分类修改 / 删除 |
+| GET/POST | `/api/categories` | 分类列表 / 新建（含分块策略、块大小、重叠，以及后端下发的 `strategy_label` / `strategy_boundary`（边界依据）/ `strategy_description` / `size_unit`） |
+| PATCH/DELETE | `/api/categories/{id}` | 分类修改（含分块策略） / 删除 |
+| GET | `/api/knowledge/filters` | 问答检索范围选项（业务模块 / 适用场景 / 分级 / 分块策略） |
 | GET | `/api/knowledge/overview` | 知识库分类视图 + 总览统计 |
-| POST | `/api/public/chat` | **用户端**问答（SSE，会话自动标记 `source=user`） |
-| POST | `/api/chat` | 管理端问答（SSE，会话标记 `source=admin`） |
-| GET | `/api/sessions` | 会话列表（`?source=user/admin` 筛选） |
-| GET | `/api/sessions/stats` | 会话统计（总会话/用户端/管理端/消息数） |
-| GET | `/api/sessions/{id}/messages` | 会话历史 |
+| POST | `/api/public/chat` | **用户端**问答（SSE，会话自动标记 `source=user`；仅检索 `visibility=public` 的文档） |
+| POST | `/api/chat` | 管理端问答（SSE，会话标记 `source=admin`；请求可带 `module`/`scenario`/`visibility` 限定检索范围） |
+| GET | `/api/sessions` | 当前账号的会话列表（`?source=user/admin` 筛选） |
+| GET | `/api/sessions/stats` | 当前账号的会话统计（总会话/用户端/管理端/消息数）；管理员「对话统计」另见 `/api/stats/chat` |
+| GET | `/api/sessions/{id}/messages` | 当前账号某会话的历史（不属于当前账号返回 404） |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
-| GET/PUT | `/api/settings` | 运行时设置读取 / 更新（检索分块参数 + 联网搜索开关） |
+| GET/PUT | `/api/settings` | 当前账号的运行时设置读取 / 更新（检索与分块参数 + 分级/时间权重 + 联网搜索开关）；密钥清空保存即删除对应行 |
+| GET | `/api/settings/widget-link` | 当前账号的用户端问答链接（`token` + `url`，免登录，按该账号的文档与模型配置回答） |
+| GET | `/api/settings/brand` | 读取当前账号的品牌配置（后台 / 用户端的名称、副标题、Logo） |
+| POST/DELETE | `/api/settings/brand-logo` | 上传 / 恢复默认品牌 Logo（PNG / JPG / SVG / WEBP，≤ 2MB） |
 | GET/POST | `/api/qa-categories` | 问答归档分类列表 / 新增 |
 | PUT/DELETE | `/api/qa-categories/{id}` | 问答归档分类修改 / 删除（「其他」不可删） |
 | POST | `/api/settings/seed` | 手动导入 `DOC/` 初始文档 |
@@ -794,11 +860,11 @@ git push origin main   # Vercel 自动重新部署
 |---|---|---|
 | A1 接收文件 + 哈希 | 计算 SHA-256 文件摘要 | `app/services/ingest.py:29` `file_sha256()` |
 | A2 去重判断 | 查 DB 中是否已有同 hash 文档；已有且 `ready` → 跳过；已有但 `failed` → 清旧数据重试 | `app/crud.py:181` `find_document_by_hash()`<br>`app/services/ingest.py:76` 调用向量库删除旧切片<br>`app/services/vector/sqlite_store.py:75` `delete_by_doc()`（本地）或 `app/services/vector/pgvector_store.py:113`（云端） |
-| A3 自动分类 | 文件名关键词匹配 → 归入对应分类 | `app/services/ingest.py:33` `infer_category_id()` → `app/crud.py:65` `get_or_create_category()` |
+| A3 自动分类 | 「默认配置」上传（未指定 `category_id`）时，解析完成后按**文档实际内容**识别分类：代码特征行占比、表格元素占比、步骤标记密度、条款密度、标题+篇幅各自独立评分并取最高分；文件名不再参与判定 | `app/services/doc_classifier.py` `classify(elements, filename)` → `app/crud.py` `get_or_create_category()` |
 | A4 落盘 + 建 DB 记录 | 文件写入 `backend/data/uploads/`，DB 插入 `documents` 表，状态先标记 `processing` | `app/services/ingest.py:80` 落盘在同函数内<br>`app/crud.py:121` `insert_document()` |
-| A5 解析抽取 | 按扩展名分派解析器。WPS 非法 docx 自动回退 OOXML | `app/services/parser.py:134` `extract_and_clean()`（统一入口）<br>内部按扩展名分派：<br>· docx：`parser.py:56` `_extract_docx()` → 异常回退 `parser.py:73` `_extract_docx_ooxml()`<br>· pdf：`parser.py:36` `_extract_pdf()`<br>· pptx：`parser.py:92` `_extract_pptx()`<br>· md/txt：`parser.py:109` `_extract_text()` |
-| A6 清洗 | 去除空白、过短片段（<10 字符）、全特殊字符 | `app/services/parser.py:123` `clean_text()`（被 `extract_and_clean()` 在 L139 调用） |
-| A7 中文分块 | 分隔符优先级 `\n\n → \n → 。！？ → ；， → 空格`，默认 600 字符 / 120 重叠 | `app/services/chunker.py:30` `chunk_document()` → 内部用 `chunker.py:19` `_build_splitter()` 构建 `RecursiveCharacterTextSplitter` |
+| A5 解析抽取 | 按扩展名分派解析器，输出**结构化元素**（text / heading / table / code，附带页码、标题层级、表格行）。WPS 非法 docx 自动回退 OOXML | `app/services/parser.py` `extract_elements()`（统一入口）<br>· docx：`_extract_docx()` → 异常回退 `_extract_docx_ooxml()`<br>· pdf：`_extract_pdf()`<br>· pptx：`_extract_pptx()`<br>· md/txt：`_extract_text()`（识别 `#` 标题、``` 代码块、`|` 表格）<br>· 代码文件：`_extract_code()`（保留缩进，整体标记为 code） |
+| A6 清洗 | 去除空白、过短片段（<10 字符）、全特殊字符；代码保留原始缩进 | `app/services/parser.py` `clean_text()` / `_clean_code()`（由 `extract_and_clean()` 调用） |
+| A7 分块 | **按文档分类选策略**：standard 基础标准（512 Token 基线 + 10%~15% 重叠）、semantic 语义（标题/段落/条款边界）、hierarchical 层级（章节摘要父块 + 子块）、code 代码（def/class/function/export 边界）、table 表格（表头每行组重复）、flow 流程（「第 X 步 / 步骤 X / ①」等步骤边界）。「默认配置」文档按识别出的文档类型选策略与块大小/重叠（设置页「按文档类型的分块参数」）。每块记录原文 `char_start` / `char_end` 与章节、Token 数 | `app/services/chunker.py` `chunk_document(elements, ..., strategy=...)` → 分派 `_chunk_standard` / `_chunk_semantic` / `_chunk_hierarchical` / `_chunk_code` / `_chunk_table` / `_chunk_flow`；策略取自 `crud.DEFAULT_CATEGORIES` 或分类表配置 |
 | A8 向量化 | 每个切片生成 512 维向量，首次调用时懒加载 BGE 模型并缓存 | `app/services/embeddings.py:150` `get_embedder()`（懒加载入口）<br>`app/services/embeddings.py:161` `embed_documents()`（批量编码，被 vector_store 在 `add_chunks()` 内部调用）<br>本地 BGE 实现：`app/services/embeddings.py:44` `LocalBGEEmbedder` |
 | A9 写入向量库 | 连同元数据（`doc_id` / `filename` / `chunk_index`）批量写入 | `app/services/vector/__init__.py:15` `get_vector_store()`（工厂）<br>`app/services/vector/sqlite_store.py:49` `add_chunks()`（本地 SQLite 默认）<br>或 `app/services/vector/pgvector_store.py:85`（云端 Postgres + pgvector）<br>或 `app/services/vector/chroma_store.py:28`（可选 ChromaDB） |
 | A10 更新状态 + 回滚 | A5-A9 任何一步异常 → 回滚向量切片 + 标记 DB 为 `failed`；成功 → 置 `ready` | `app/crud.py:147` `update_document()`（更新状态）<br>`app/services/ingest.py:116-123` `except` 块内的回滚逻辑 |
@@ -809,10 +875,10 @@ git push origin main   # Vercel 自动重新部署
 
 | 步骤 | 做了什么 | 具体代码（`backend/` 相对路径） |
 |---|---|---|
-| B1 读取运行时配置 | 读进程内运行时配置（启动时由 `app_settings` 覆盖 `.env`，保存设置后即时刷新） | `app/routers/chat.py:50` `settings_service.get_runtime()` |
+| B1 读取运行时配置 | 按当前账号读进程内运行时配置（`user_settings` 覆盖 `.env` 默认，保存设置后即时刷新） | `app/routers/chat.py:50` `settings_service.get_runtime()` |
 | B2 问题向量化 | 用户问题走 BGE 编码为 512 维 | `app/services/vector/sqlite_store.py:80` `search()` 内部在 L83 调用 `app/services/embeddings.py:165` `embed_query()` |
-| B3 向量召回 TopK | 余弦相似度搜索，过滤低于阈值的结果 | 同上 `app/services/vector/sqlite_store.py:80` `search()`（L84 归一化 + L97 点积计算余弦相似度 + L99 阈值过滤 + L111-L113 TopK 截取）<br>如果配置了 pgvector 则自动路由到 `pgvector_store.py:120` |
-| B4 格式化上下文 + 绑定引用 | 召回切片拼成 `[1]（文件名）\n文本\n\n[2]...` 格式，同时整理 sources 列表；编号按检索顺序统一（检索 = 上下文 = LLM 看到的 [n] = 前端卡片），并按问题关键词从切片中挑出细粒度原文句子作为 `span_start/span_len/span_text` | `app/services/rag.py:17` `build_context()` → `app/services/span.py` `locate_span()` |
+| B3 向量召回 + 过滤加权 | 先多取候选（`max(k*4, k+8)`）再按 `visibility` / `module` / `scenario` 过滤与过期文档剔除，最后按 **`相似度 × 分级权重 × 时间衰减 × 重要度`** 重排取 Top-K | `app/services/vector/sqlite_store.py` `search()`（余弦相似度 + 阈值过滤）；pgvector 走 `pgvector_store.py` `search()`；加权在 `app/services/rag.py` `retrieve_hits()` → `_rank_hits()` |
+| B4 格式化上下文 + 绑定引用 | 召回切片拼成 `[1]（文件名）\n文本\n\n[2]...` 格式，同时整理 sources（含分级、章节、生效日期、分块策略、综合得分）；编号按检索顺序统一，并按问题关键词从切片中挑出细粒度原文句子作为 `span_start/span_len/span_text` | `app/services/rag.py` `build_context()` → `app/services/span.py` `locate_span()` |
 | B5 构建 Prompt | 系统提示词（`SYSTEM_PROMPT`）+ 用户问题 + 格式化后的参考资料 → 组装两条 message | `app/services/llm.py:46-47`（system / user message 拼接） |
 | B6 获取模型客户端 | 按运行时配置（设置页或 `.env`）的 Key / Base URL 创建客户端；模型名取配置中的 `llm_model` | `app/services/llm.py:33` `get_client()` |
 | B7 流式生成 | OpenAI 兼容 SDK 的 `chat.completions.create(stream=True)` 逐 token yield | `app/services/llm.py:43-55`（API 调用与 token 迭代） |
@@ -832,12 +898,18 @@ git push origin main   # Vercel 自动重新部署
 
 ## 关键实现说明
 
+- **多账号隔离**：所有业务表带 `user_id`，查询与写入一律以当前令牌所属账号为准；会话 / 文档归属不匹配返回 404；向量检索只在该账号的 `doc_ids` 内召回（`crud.list_document_ids` + `store.search(doc_ids=...)`）。
+- **账号与令牌**：登录令牌为 HMAC-SHA256 签名的无状态串（`uid` + 过期时间 + 随机数），`/api/auth/me` 校验；用户端分享令牌额外带 `scope=widget`，有效期 10 年，`require_user` 遇到 widget 令牌直接 403，`optional_user` 仅允许其读写问答与品牌配置。
+- **设置按账号独立**：`user_settings` 复合主键 `(user_id, key)`，`settings_service.effective(db, uid)` 只读该账号的覆盖值，未配置时回落 `backend/.env` 默认（模板中所有 Key 为空），因此**不会借用其他账号的 Key**；空值保存即删除该行，数据库不残留 `xxx=''` 记录。
 - **存储自适应**：`config.Settings.effective_vector_backend` 按 `DATABASE_URL` 自动选择 `pgvector`（Postgres）或内置 `sqlite` 向量表；也可用 `VECTOR_BACKEND` 强制指定。
 - **向量库抽象**：`services/vector/` 下三种实现共享 `add_chunks / delete_by_doc / search / get_chunks / count` 接口，业务层无感知。
 - **入库一致性**：解析或向量化失败时，文档标记 `failed` 并回滚已写入切片；服务重启会将残留 `processing` 标记为 `failed`。
 - **重复文件去重**：按文件 SHA-256 判定，重复上传直接跳过；失败记录重传会先清理旧数据再重建。
 - **DOCX 兼容**：部分 WPS 导出的 docx 含非法 media part，`python-docx` 解析失败时自动回退直接读取 `word/document.xml`。
-- **中文分块**：分隔符优先级 `\n\n → \n → 。！？ → ；， → 空格`，默认 600 字符 / 120 重叠。
+- **分块策略**：按文档分类与文件类型选择策略 —— token 按 Token 数（目标 Token 换算字符）、standard 基础标准（512 Token 基线 ≈ 768 字符 + 10%~15% 重叠）、semantic 语义（标题/段落/条款边界）、paragraph 段落结构（标题切章节 + 段落合并，适配 Word/TXT）、page 按页切分（同页不跨页并保留页码，适配 PDF/PPT）、hierarchical 层级（章节摘要父块 + 子块）、code 代码（函数/类边界）、table 表格（表头随行组重复）、flow 流程（步骤边界）；每块记录原文 `char_start` / `char_end`、章节、页码与 Token 数。
+- **块大小与重叠的语义**：块大小是「目标上限」而非硬性最大值——累计达到目标即切分，遇到标题 / 条款 / 步骤 / 页码等边界会提前断开；重叠仅在超长内容二次细切时生效，相邻块保留设定长度的共同上下文，避免语义被割断（768 字符 ≈ 512 Token）。
+- **文档类型兜底**：PDF / PPT 始终按页切分，代码后缀始终按代码结构；内容识别为通用文档时，Word/TXT 按段落标题、Markdown 按语义；识别出制度/表格/流程等明确特征时以内容为准（`ingest.resolve_strategy()`）。
+- **分级与时间权重**：检索先按 `visibility` / `module` / `scenario` 过滤、剔除过期文档，再按 `相似度 × 分级权重 × 时间衰减 × 重要度` 重排（`rag._rank_hits`）；权重与半衰期可在设置页调整。
 - **反幻觉**：系统提示词要求仅依据参考资料回答、标注 `[n]` 引用、无依据时明确说明。
 
 ## 测试
@@ -885,16 +957,16 @@ python tests/smoke_test.py
 
 ### B. 配置改了却没生效
 
-先记住一条优先级：**管理端保存的 `app_settings` 值 > `backend/.env` 默认值**。模型/检索/Key 类配置在「设置 → 模型服务」改完保存即生效；`.env` 只在启动时读取。
+先记住一条优先级：**当前账号在管理端保存的 `user_settings` 值 > `backend/.env` 默认值**。模型/检索/Key 类配置在「设置 → 模型服务」改完保存即生效；`.env` 只在启动时读取。不同账号各存各的，互不覆盖。
 
 | 现象 | 原因 | 解决 |
 |---|---|---|
 | 管理端保存后看起来没变化 | 设置了但没点「保存」；或浏览器缓存旧页面 | 确认点击保存并出现「已保存，立即生效」；`Ctrl+F5` 刷新 |
 | 切换向量模型后检索不到内容 | 旧切片向量与新模型不在同一向量空间 | 保存后点「立即重建向量索引」，或删除文档重新上传 |
 | 改 `CHUNK_SIZE` 后已有文档没变化 | 分块只在入库时执行 | 在设置页改分块大小并保存（自动重建全部切片），或点「立即重建向量索引」，或删除文档后重新上传 |
-| 改 `.env` 的检索参数无效 | 管理端已保存过同名配置 | 在「模型服务」里改，或清空 `app_settings` 中对应该项 |
+| 改 `.env` 的检索参数无效 | 当前账号已保存过同名配置 | 在「模型服务」里改，或清空该账号 `user_settings` 中对应该项 |
 | 换模型后报 401 / 404 | Base URL 与厂商不匹配 | 使用设置页的快捷填充（百炼 / DeepSeek / 硅基流动），或核对厂商接口地址 |
-| 密钥框里已有内容 / 为空 | 设置页会回显当前生效的 Key（管理端保存值优先，其次 `.env`）；两者都没有时为空 | 要换 Key 直接改成新值；**清空后保存即删除该 Key**；未改动的密钥不会被重置 |
+| 密钥框里已有内容 / 为空 | 设置页只回显**当前账号**的 Key（本账号保存值优先，其次 `.env`）；两者都没有时为空 | 要换 Key 直接改成新值；**清空后保存即删除数据库中的该密钥记录**；未改动的密钥不会被重置；其他账号看不到本账号的 Key |
 | 改 Prompt 后回答没变化 | ① 问题未命中知识库，走了兜底文案 ② 后端未重启 | 用能命中的问题验证（出现「📎 参考来源」才调用了 LLM）；重启后端 |
 | 改了管理端页面没变化 | 后端托管的是 `frontend/dist` 构建产物 | `npm run build` 后刷新；开发期用 `npm run dev` |
 
@@ -997,9 +1069,11 @@ SYSTEM_PROMPT = """只能依据下面上下文回答，禁止编造。
 |---|---|
 | iframe 嵌入官网 | `<iframe src="http://your-domain/" width="380" height="600" style="border:0;border-radius:12px"></iframe>` |
 | 嵌入后跨域被拦 | `.env` 的 `ALLOW_ORIGINS` 要包含官网域名（生产不要保留 `*`） |
-| 管理端没有登录 | 本项目未内置用户体系，`/admin/` 建议在网关层加鉴权 |
-| Windows 终端中文乱码 | `chcp 65001`，或使用 UTF-8 终端查看日志 |
-| 密钥安全 | 生产环境优先在管理端「设置 → 模型服务」填写 Key（存数据库，打开设置页会回显当前值）；`.env` 中的 Key 已被 `.gitignore` 排除，不要把 `.env` 提交到 Git |
+| 管理端登录 / 注册 | 内置手机号 + 密码 + 图形验证码账号体系，未登录只显示登录页；默认管理员 `13800000000 / admin123`，部署后请立即在「用户管理」重置 |
+| 多账号如何隔离 | 每个账号的文档、分类、问答记录、模型 Key 与设置独立存储，互不可见；管理员只额外拥有「用户管理」「对话统计」 |
+| 如何发给访客 / 嵌入官网 | 在「设置 → 信息分类」或「用户管理 → 用户端链接」复制 `https://你的域名/user/index.html?at=<分享令牌>`；每个账号各一条，回答只使用该账号的文档与配置 |
+| 分享链接是否安全 | 令牌带 `scope=widget`，只能问答与读取品牌配置，调用管理接口返回 403；链接过期前长期有效，泄漏后可在网关层屏蔽该 URL |
+| 密钥安全 | 生产环境优先在管理端「设置 → 模型服务」填写 Key（存数据库，打开设置页会回显当前账号的值）；`.env` 中的 Key 已被 `.gitignore` 排除，不要把 `.env` 提交到 Git |
 
 ### J. 历史问题根因汇总
 
@@ -1013,7 +1087,7 @@ SYSTEM_PROMPT = """只能依据下面上下文回答，禁止编造。
 | 4 | ChromaDB 在 Python 3.13/3.14 报 `RustBindingsAPI` 错误 | chromadb 轮子尚未适配新版 Python | 本地默认改用**内置 SQLite 向量表**（`vector_chunks`），chromadb 降级为可选后端 |
 | 5 | WPS 导出的 `.docx` 上传即失败 | zip 内含非法 media/关系项，python-docx 拒绝解析 | `parser.py` 捕获异常后回退为直接解析 OOXML 的 `word/document.xml` |
 | 6 | 重新导入文档后仍检索到旧内容 | 失败记录重建时未清理旧向量 | `ingest.py` 重建前先 `store.delete_by_doc(doc_id)`；整条链路失败回滚 |
-| 7 | 改了 `.env` 的 `SCORE_THRESHOLD` / `TOP_K` 却不生效 | `settings_service.effective()` 用 `app_settings` 表覆盖 `.env` | 清空数据库残留配置，明确「数据库 > .env」优先级（本项目现以 `.env` 为唯一来源） |
+| 7 | 改了 `.env` 的 `SCORE_THRESHOLD` / `TOP_K` 却不生效 | 设置页把同名项存进了数据库，优先级高于 `.env` | 明确「账号设置 > .env」优先级；现按账号读 `user_settings`，无记录时回落 `.env` 默认（多账号改造前为全局 `app_settings`） |
 | 8 | 改了 Prompt，回答没变化 | ① 问题未命中知识库 → 走 `rag.py` 写死的兜底文案 ② 后端未重启（`SYSTEM_PROMPT` 是模块常量） | 用能命中的问题验证（有「📎 参考来源」卡片才调了 LLM）；改后重启；Prompt 只保留一处 |
 | 9 | 备份数据库后恢复发现数据变少 | SQLite 开启 WAL，最新写入在 `rag.db-wal` | 停服务后复制整个 `backend/data/`，勿只拷 `rag.db` |
 | 10 | 用户端提问了，管理端看不到记录 | 记录已入库，管理端页面只加载一次 | 问答记录页改为每 10 秒自动刷新 + 手动刷新按钮 |
@@ -1021,7 +1095,12 @@ SYSTEM_PROMPT = """只能依据下面上下文回答，禁止编造。
 | 12 | 问答记录页始终「暂无会话记录」，但接口能返回数据 | 前端把 `api` 对象当函数调用（`api(url)`），抛 `TypeError` 被静默吞掉 | 统一走 `api.listSessions()` / `api.sessionStats()` / `api.sessionMessages()`，并重新构建前端 |
 | 13 | 参考来源点开后是一屏切片文字，不像原文档 | 早期定位页直接拼接 `vector_chunks` 的切片文本 | 改为按原文件类型渲染：docx 走 mammoth（保留标题/表格/图片）、pptx 按页显示、Markdown 渲染语法（标题/列表/表格/代码块）、txt 按空行分段并保留原换行、pdf 用 iframe `#page=N` |
 | 13.1 | 点击 `[n]` 后高亮跑到了无关的目录/标题行 | 只按切片前 12 个字做节点级模糊匹配，切片开头常是目录或上一段残留 | 切片入库时保存 `char_start/char_end` 字符偏移；召回后 `span.py` 按问题关键词从切片里挑出最相关的一两句话（`span_start/span_len`）；预览页把片段写入 `data-quote`，JS 用「去空白全文索引 + Range」逐字符定位并包裹 `.hit`，匹配失败才回退 `data-anchor` 粗定位。旧切片无需重切也能获得 span 高亮 |
-| 14 | 联网开关打开后仍回复「未查询到相关内容」 | 页面拨动开关后未点「保存」，`app_settings.web_search_enabled` 仍为 `false` | 保存即写入数据库并立即生效；`.env` 中的 `TAVILY_API_KEY` 变更才需要重启 |
+| 14 | 联网开关打开后仍回复「未查询到相关内容」 | 页面拨动开关后未点「保存」，`user_settings.web_search_enabled` 仍为 `false` | 保存即写入当前账号设置并立即生效；`.env` 中的 `TAVILY_API_KEY` 变更才需要重启 |
+| 15 | 登录普通账号，后台却显示管理员的账号信息、文档与问答记录 | ① 内嵌用户端的 iframe 地址由 `computed` 读取 `localStorage` 令牌，但未依赖响应式变量，切换账号后仍缓存管理员地址；② 用户端把地址栏 `?token=` 写回 `gala_token`，触发 `storage` 事件让整页重载成管理员 | `assistantSrc` 显式依赖 `user.value?.id`；iframe 加 `:key="user.id"` 强制按新账号重建；用户端带参数页面**不再回写** `localStorage`；后台监听 `storage` 事件，其他标签页切换账号时按新令牌重新加载数据 |
+| 16 | 管理员重置密码 / 管理账号时提示「需要管理员权限」 | 同一浏览器其他标签页把 `gala_token` 换成了普通账号令牌——界面仍显示管理员，但请求带的是普通令牌 | 后台监听 `storage` 事件同步登录态；请求遇到 403 且提示管理员权限时，前端明确提示「当前登录身份已变化（可能是其他标签页切换了账号），请刷新页面重新登录」 |
+| 17 | 管理员配置了 API Key，其他账号设置里看不到 Key，却能调用大模型 | 早期设置是全局 `app_settings` + 匿名用户端回落到站点默认，导致普通账号借用管理员的 Key | 改为按账号 `user_settings`（主键 `(user_id, key)`）：`effective(db, uid)` 只读本账号，无 Key 直接报「未配置 API Key」；新账号只生成默认分类，不复制任何 Key |
+| 18 | 删除 API Key 保存后，数据库仍有 `llm_api_key=''` 的空记录 | `set_settings` 把空串也当成一条设置写入 | 空值即「清除」：直接删除该行（`user_settings` 与旧 `app_settings`、品牌 Logo 同一规则），数据库不再残留空密钥 |
+| 19 | 用户端免登录访问时，统用了管理员文档与 Key，无法按账号区分 | 用户端只有「登录」与「匿名」两种身份，访客无法携带账号归属 | 新增每账号用户端分享令牌（`?at=`，payload 带 `scope=widget`）：按令牌 `uid` 使用该账号的文档与模型配置；纯未登录访客才使用站点默认配置 |
 
 #### 加载时间过长是怎么解决的（重点）
 

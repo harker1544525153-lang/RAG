@@ -5,7 +5,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,8 +15,9 @@ from app.config import BASE_DIR, settings
 from app.db import SessionLocal, init_db
 from app.models import ChatMessage, Document
 from app import crud
-from app.routers import chat, documents, knowledge, qa_categories, settings as settings_router
-from app.services import category_service, settings_service
+from app.routers import auth, chat, documents, knowledge, qa_categories, settings as settings_router, users
+from app.security import _extract_token, parse_token
+from app.services import settings_service
 from app.services.seed import seed_documents
 from app.services.embeddings import warmup as warmup_embeddings
 from app.services.vector import get_vector_store
@@ -40,17 +41,22 @@ async def lifespan(_app: FastAPI):
         init_db()
         db = SessionLocal()
         try:
-            crud.ensure_default_categories(db)
-            category_service.ensure_seed(db)
+            admin = crud.ensure_default_admin(db)
+            if admin:
+                # 旧版本无归属的数据统一划给管理员账号
+                crud.backfill_admin_data(db, admin.id)
+            # 每个账号补齐自己的分类与初始化设置（管理员配置为默认副本）
+            for uid in crud.list_user_ids(db):
+                crud.seed_user(db, uid)
             if not _IS_SERVERLESS:
                 # 历史数据维护只在常驻部署执行：Serverless 每次冷启动都跑一遍会明显拖慢首个请求
                 crud.clear_stale_processing(db)
                 backfilled = crud.backfill_session_categories(db)
                 if backfilled:
                     logger.info("历史会话自动归档完成：%d 条", backfilled)
-            # 载入管理端保存的运行时配置（DB 覆盖 .env）
-            settings_service.refresh(db)
-            logger.info("运行时配置: 大模型=%s 向量化=%s", 
+            # 载入各账号的运行时配置（按账号独立）
+            settings_service.refresh_all(db)
+            logger.info("运行时配置: 大模型=%s 向量化=%s",
                         settings_service.get_runtime()["llm_model"],
                         settings_service.get_runtime()["embedding_provider"])
         finally:
@@ -84,12 +90,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(documents.router)
 app.include_router(documents.view_router)
 app.include_router(chat.router)
 app.include_router(knowledge.router)
 app.include_router(settings_router.router)
 app.include_router(qa_categories.router)
+
+
+@app.middleware("http")
+async def _bind_current_user(request: Request, call_next):
+    """把请求所属账号写入 contextvar，让深层服务按账号读取各自的运行时配置。"""
+    payload = parse_token(_extract_token(request))
+    token = settings_service.set_current_user(payload.get("uid") if payload else None)
+    try:
+        return await call_next(request)
+    finally:
+        settings_service.reset_current_user(token)
 
 
 @app.get("/api/health")
@@ -129,6 +148,11 @@ def health():
 #   /*        → user/          （用户端智能客服）
 _admin_dist = BASE_DIR.parent / "frontend" / "dist"
 _user_dir = BASE_DIR.parent / "user"
+_brand_dir = settings.DATA_DIR / "brand"
+
+# 账号自定义 Logo（设置 → 信息分类 上传后写入该目录）
+_brand_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/brand", StaticFiles(directory=_brand_dir), name="brand")
 
 # 前端资源名带哈希可长期缓存，但 index.html 绝不能被缓存：
 # 否则重新部署后浏览器仍加载旧 index.html，里面引用的旧哈希文件已被删除 → 404 白屏

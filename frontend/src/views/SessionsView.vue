@@ -137,12 +137,16 @@ async function openSession(id) {
   messages.value = await api.sessionMessages(id)
 }
 
-watch(filter, loadSessions)
-watch(categoryFilter, loadSessions)
+watch(filter, () => loadSessions().catch(() => {}))
+watch(categoryFilter, () => loadSessions().catch(() => {}))
 
 let timer = null
 async function refreshAll() {
-  await Promise.all([loadSessions(), loadStats()])
+  try {
+    await Promise.all([loadSessions(), loadStats()])
+  } catch {
+    // 后端暂不可用（如服务重启中）时保持上次数据，下一轮自动重试，避免未捕获异常
+  }
 }
 onMounted(() => {
   refreshAll()

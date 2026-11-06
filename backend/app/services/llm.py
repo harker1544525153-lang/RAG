@@ -34,10 +34,10 @@ _client: OpenAI | None = None
 _client_key: tuple[str, str] | None = None
 
 
-def get_client() -> OpenAI:
+def get_client(cfg: dict | None = None) -> OpenAI:
     """按运行时配置创建客户端（复用连接池；Key / URL 变更时自动重建）。"""
     global _client, _client_key
-    cfg = _cfg()
+    cfg = cfg or _cfg()
     api_key = (cfg.get("llm_api_key") or "").strip()
     base_url = (cfg.get("llm_base_url") or "").strip()
     if not api_key:
@@ -56,10 +56,14 @@ def stream_chat(
     context: str,
     *,
     temperature: float | None = None,
+    cfg: dict | None = None,
 ) -> Generator[str, None, None]:
-    """流式生成回答。模型、温度与厂商由运行时配置决定。"""
-    cfg = _cfg()
-    client = get_client()
+    """流式生成回答。模型、温度与厂商由运行时配置决定。
+
+    cfg 显式传入：SSE 流在线程池中迭代时取不到请求的 contextvar。
+    """
+    cfg = cfg or _cfg()
+    client = get_client(cfg)
     response = client.chat.completions.create(
         model=cfg.get("llm_model") or settings.LLM_MODEL,
         messages=[

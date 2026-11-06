@@ -15,6 +15,8 @@ from app.config import settings
 from app.db import get_db
 from app import crud
 from app.services import ingest
+from app.security import require_user
+from app.models import User
 from app.services.doc_preview import MAX_HTML_CHARS, render_doc_html
 from app.services.vector import get_vector_store
 
@@ -22,9 +24,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
+def _own_doc(db: Session, doc_id: str, user: User):
+    """只允许访问当前账号自己的文档，跨账号访问一律按「不存在」处理。"""
+    doc = crud.get_document(db, doc_id)
+    if not doc or (doc.user_id or "") != user.id:
+        raise HTTPException(404, "文档不存在")
+    return doc
+
+
 class DocumentUpdate(BaseModel):
     filename: str | None = None
     category_id: str | None = None
+    auto_category: bool | None = None  # True=切回「默认配置」，按内容自动识别分类
+    tier: str | None = None
+    importance: int | None = None
+    doc_type: str | None = None
+    module: str | None = None
+    scenario: str | None = None
+    visibility: str | None = None
+    effective_date: str | None = None
+    expire_date: str | None = None
 
 
 def _check_file(filename: str, size: int) -> None:
@@ -42,13 +61,25 @@ def _check_file(filename: str, size: int) -> None:
 def upload_document(
     file: UploadFile = File(...),
     category_id: str | None = Form(None),
+    tier: str = Form("standard"),
+    importance: int = Form(5),
+    module: str = Form(""),
+    scenario: str = Form(""),
+    visibility: str = Form("public"),
+    effective_date: str | None = Form(None),
+    expire_date: str | None = Form(None),
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    """上传并同步处理文档（解析→清洗→分块→向量化→入库）。"""
+    """上传并同步处理文档（解析→按分类策略分块→向量化→写入分级元数据）。"""
     content = file.file.read()
     _check_file(file.filename, len(content))
-    if category_id and not crud.get_category(db, category_id):
+    if category_id and not crud.get_user_category(db, category_id, user.id):
         raise HTTPException(400, "分类不存在")
+    if tier not in ("core", "standard", "archived"):
+        raise HTTPException(400, "数据分级仅支持 core / standard / archived")
+    if visibility not in ("public", "internal", "admin"):
+        raise HTTPException(400, "权限范围仅支持 public / internal / admin")
     try:
         return ingest.ingest(
             db,
@@ -56,6 +87,14 @@ def upload_document(
             content=content,
             source="upload",
             category_id=category_id,
+            tier=tier,
+            importance=importance,
+            module=module.strip(),
+            scenario=scenario.strip(),
+            visibility=visibility,
+            effective_date=effective_date or None,
+            expire_date=expire_date or None,
+            user_id=user.id,
         )
     except Exception as e:
         raise HTTPException(500, f"文档处理失败：{e}")
@@ -66,59 +105,147 @@ def get_documents(
     category_id: str | None = None,
     status: str | None = None,
     keyword: str | None = None,
+    tier: str | None = None,
+    module: str | None = None,
+    scenario: str | None = None,
+    visibility: str | None = None,
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    return crud.list_documents(db, category_id=category_id, status=status, keyword=keyword)
+    return crud.list_documents(
+        db,
+        user_id=user.id,
+        category_id=category_id,
+        status=status,
+        keyword=keyword,
+        tier=tier,
+        module=module,
+        scenario=scenario,
+        visibility=visibility,
+    )
 
 
 @router.get("/stats")
-def get_stats(db: Session = Depends(get_db)):
-    stats = crud.document_stats(db)
-    stats["vector_chunks"] = get_vector_store().count()
+def get_stats(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    stats = crud.document_stats(db, user.id)
+    # 向量库是全局的，这里只统计当前账号文档的切片数（按文档 id 前缀归属无法区分，
+    # 因此用文档表里的 chunk_count 累计值）
     return stats
 
 
+@router.get("/strategy-preview")
+def strategy_preview(filename: str, category_id: str | None = None,
+                     user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """上传前展示实际采用的切分方式与边界依据（分类为空表示「默认配置」）。"""
+    category = None
+    if category_id:
+        category = crud.get_user_category(db, category_id, user.id)
+        if not category:
+            raise HTTPException(400, "分类不存在")
+    return ingest.preview_strategy(filename, category)
+
+
 @router.get("/{doc_id}/chunks")
-def get_document_chunks(doc_id: str, limit: int = 100, db: Session = Depends(get_db)):
+def get_document_chunks(doc_id: str, limit: int = 100,
+                        user: User = Depends(require_user), db: Session = Depends(get_db)):
     """预览某文档的切片内容。"""
-    doc = crud.get_document(db, doc_id)
-    if not doc:
-        raise HTTPException(404, "文档不存在")
+    _own_doc(db, doc_id, user)
     return get_vector_store().get_chunks(doc_id, limit=limit)
 
 
 @router.patch("/{doc_id}")
-def update_document(doc_id: str, payload: DocumentUpdate, db: Session = Depends(get_db)):
-    """修改文档名称或所属分类（知识库动态整理）。"""
+def update_document(doc_id: str, payload: DocumentUpdate,
+                    user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """修改文档名称/分类/分级/标签/有效期；检索元数据变化时自动重建切片使之生效。"""
+    doc = _own_doc(db, doc_id, user)
+
+    fields: dict = {}
+    if payload.filename and payload.filename.strip():
+        fields["filename"] = payload.filename.strip()
+    if payload.auto_category is True:
+        # 切回「默认配置」：不指定分类，重建时按文档实际内容自动识别
+        fields["category_id"] = None
+        fields["auto_category"] = 1
+    elif payload.category_id:
+        if not crud.get_user_category(db, payload.category_id, user.id):
+            raise HTTPException(400, "分类不存在")
+        fields["category_id"] = payload.category_id
+        fields["auto_category"] = 0
+    for key in ("tier", "doc_type", "module", "scenario", "visibility",
+                "effective_date", "expire_date"):
+        value = getattr(payload, key)
+        if value is not None:
+            fields[key] = value.strip()
+    if payload.importance is not None:
+        fields["importance"] = max(1, min(10, payload.importance))
+    if payload.tier is not None and payload.tier not in ("core", "standard", "archived"):
+        raise HTTPException(400, "数据分级仅支持 core / standard / archived")
+    if payload.visibility is not None and payload.visibility not in ("public", "internal", "admin"):
+        raise HTTPException(400, "权限范围仅支持 public / internal / admin")
+    if not fields:
+        raise HTTPException(400, "没有可更新的字段")
+
+    # 元数据会随切片写入向量库，因此分类/分级/标签/有效期变化后必须重建该文档切片
+    rebuild = any(
+        k in fields
+        for k in ("category_id", "auto_category", "tier", "importance", "doc_type", "module",
+                  "scenario", "visibility", "effective_date", "expire_date")
+    )
+    crud.update_document(db, doc_id, **fields)
+
+    result = None
+    if rebuild:
+        try:
+            result = _reindex(db, doc_id)
+            result["_rebuilt"] = True
+        except Exception as e:  # 重建失败不阻塞元数据更新，明确提示原因
+            logger.warning("文档元数据变更后重建失败: %s", doc_id, exc_info=True)
+            result = crud.document_to_dict(crud.get_document(db, doc_id))
+            result["_rebuilt"] = False
+            result["_warning"] = f"元数据已更新，但切片重建失败：{e}"
+    if result is None:
+        result = crud.document_to_dict(crud.get_document(db, doc_id))
+    return result
+
+
+def _reindex(db: Session, doc_id: str) -> dict:
+    """按当前配置重建单个文档切片（原始文件缺失时给出明确提示）。"""
     doc = crud.get_document(db, doc_id)
     if not doc:
         raise HTTPException(404, "文档不存在")
-    fields = {}
-    if payload.filename and payload.filename.strip():
-        fields["filename"] = payload.filename.strip()
-    if payload.category_id:
-        if not crud.get_category(db, payload.category_id):
-            raise HTTPException(400, "分类不存在")
-        fields["category_id"] = payload.category_id
-    if not fields:
-        raise HTTPException(400, "没有可更新的字段")
-    crud.update_document(db, doc_id, **fields)
+    paths = sorted(settings.UPLOAD_DIR.glob(f"{doc.id}_*"))
+    if not paths:
+        raise ValueError("原始文件已丢失，无法重建切片，请重新上传")
+    ingest.reindex_document(db, doc, paths[0])
+    # 重建可能因「默认配置」重新识别了分类，返回最新文档信息（含 auto_category）
     return crud.document_to_dict(crud.get_document(db, doc_id))
 
 
+@router.post("/{doc_id}/rebuild")
+def rebuild_document(doc_id: str, user: User = Depends(require_user),
+                     db: Session = Depends(get_db)):
+    """按当前分类策略重建该文档切片（切换分类后可手动触发）。"""
+    _own_doc(db, doc_id, user)
+    try:
+        return _reindex(db, doc_id)
+    except Exception as e:
+        raise HTTPException(500, f"重建失败：{e}")
+
+
 @router.delete("/{doc_id}")
-def remove_document(doc_id: str, db: Session = Depends(get_db)):
+def remove_document(doc_id: str, user: User = Depends(require_user),
+                    db: Session = Depends(get_db)):
+    _own_doc(db, doc_id, user)
     if not ingest.remove(db, doc_id):
         raise HTTPException(404, "文档不存在")
     return {"ok": True}
 
 
 @router.get("/{doc_id}/file")
-def download_document(doc_id: str, db: Session = Depends(get_db)):
+def download_document(doc_id: str, user: User = Depends(require_user),
+                      db: Session = Depends(get_db)):
     """在浏览器中打开文档原文件（正文预览内嵌 PDF 时复用此接口）。"""
-    doc = crud.get_document(db, doc_id)
-    if not doc:
-        raise HTTPException(404, "文档不存在")
+    doc = _own_doc(db, doc_id, user)
     path = settings.UPLOAD_DIR / f"{doc.id}_{doc.filename}"
     if not path.exists():
         raise HTTPException(404, "原始文件不存在")

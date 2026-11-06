@@ -1,19 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-运行时设置服务：把「设置」页可修改的参数持久化到 app_settings 表，
+运行时设置服务：把「设置」页可修改的参数按账号持久化到 user_settings 表，
 并合并 .env 默认值后作为生效配置输出。
 
-优先级：app_settings（管理端保存） > backend/.env（默认回退）
-读取方式：服务内部统一用 get_runtime()（进程内缓存，保存后立即刷新），
+优先级：user_settings（当前登录账号保存） > backend/.env（默认回退）
+读取方式：服务内部统一用 get_runtime()，它通过 contextvar 识别当前请求账号，
 避免每次问答都查库；设置页需要回显密钥当前值（保存过则显示已保存值，
 否则显示 .env 默认值，都没有则为空），因此 describe() 会回传明文。
 """
+import contextvars
 import logging
 
 from app.config import settings
 from app import crud
 
 logger = logging.getLogger(__name__)
+
+# 当前请求所属账号：由 main.py 的 HTTP 中间件在进入路由前设置
+_current_user: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "gala_current_user", default=None
+)
+
+# 账号 -> 生效配置（进程内缓存，保存设置后立即刷新该账号）
+_runtimes: dict[str | None, dict] = {}
+
+
+def set_current_user(user_id: str | None):
+    return _current_user.set(user_id)
+
+
+def reset_current_user(token) -> None:
+    _current_user.reset(token)
+
+
+def current_user_id() -> str | None:
+    return _current_user.get()
 
 
 def _llm_env_key() -> str:
@@ -112,6 +133,68 @@ SPECS: dict[str, dict] = {
         "type": float, "min": 0.0, "max": 1.0, "step": 0.05, "group": "retrieval",
         "label": "相似度阈值", "hint": "越高越严格；回答太慢/召回过少时可上调到 0.45 左右",
     },
+    "hybrid_search_enabled": {
+        "type": bool, "group": "retrieval", "label": "启用混合检索",
+        "hint": "向量语义召回叠加 BM25 关键词召回，按 RRF 融合；编号、型号、专有名词等精确查询召回更准",
+    },
+    # ---------------- 数据分级与权重 -------------
+    "tier_core_weight": {
+        "type": float, "min": 0.5, "max": 2.0, "step": 0.05, "group": "retrieval",
+        "label": "核心权威权重", "hint": "核心制度/官方手册检索排序加成，建议 1.1 ~ 1.3",
+    },
+    "tier_standard_weight": {
+        "type": float, "min": 0.5, "max": 2.0, "step": 0.05, "group": "retrieval",
+        "label": "普通参考权重", "hint": "普通业务文档的基础权重，通常保持 1.0",
+    },
+    "tier_archived_weight": {
+        "type": float, "min": 0.3, "max": 1.5, "step": 0.05, "group": "retrieval",
+        "label": "过期归档权重", "hint": "归档文档降权系数，建议 0.6 ~ 0.8，避免压制新资料",
+    },
+    "recency_half_life_days": {
+        "type": int, "min": 30, "max": 3650, "group": "retrieval",
+        "label": "时间权重半衰期", "unit": "天",
+        "hint": "文档越新权重越高；每过 N 天权重减半，建议 180 ~ 540",
+    },
+    "recency_floor": {
+        "type": float, "min": 0.5, "max": 1.0, "step": 0.05, "group": "retrieval",
+        "label": "时间权重下限", "hint": "旧文档最低保留权重，防止长期有效资料被完全压制",
+    },
+    "filter_expired": {
+        "type": bool, "group": "retrieval", "label": "过滤过期文档",
+        "hint": "开启后超过有效期的非核心文档不参与检索；关闭则仅降权",
+    },
+
+    # ---------------- 信息分类（品牌标识，按账号独立保存） -------------
+    "brand_admin_title": {
+        "type": str, "group": "brand", "label": "后台管理名称",
+        "hint": "管理端侧边栏显示的产品名称，留空则用内置默认值",
+        "allow_empty": True,
+    },
+    "brand_admin_subtitle": {
+        "type": str, "group": "brand", "label": "后台管理副标题",
+        "hint": "显示在后台名称下方的一句话说明",
+        "allow_empty": True,
+    },
+    "brand_admin_logo": {
+        "type": str, "group": "brand", "label": "后台管理 Logo",
+        "hint": "上传 PNG / JPG / SVG 图片，留空则使用内置图标",
+        "allow_empty": True,
+    },
+    "brand_user_title": {
+        "type": str, "group": "brand", "label": "用户端名称",
+        "hint": "用户端页面顶部显示的产品名称",
+        "allow_empty": True,
+    },
+    "brand_user_subtitle": {
+        "type": str, "group": "brand", "label": "用户端副标题",
+        "hint": "用户端名称下方的一句话说明",
+        "allow_empty": True,
+    },
+    "brand_user_logo": {
+        "type": str, "group": "brand", "label": "用户端 Logo",
+        "hint": "上传 PNG / JPG / SVG 图片，留空则使用内置图标",
+        "allow_empty": True,
+    },
 }
 
 # 会改变向量空间、需要重建索引的配置项
@@ -146,6 +229,23 @@ def _defaults() -> dict:
         "chunk_overlap": settings.CHUNK_OVERLAP,
         "top_k": settings.TOP_K,
         "score_threshold": settings.SCORE_THRESHOLD,
+        "hybrid_search_enabled": settings.HYBRID_SEARCH_ENABLED,
+
+        # 数据分级与时间权重（默认值即可用，可在设置页调整）
+        "tier_core_weight": 1.15,
+        "tier_standard_weight": 1.0,
+        "tier_archived_weight": 0.7,
+        "recency_half_life_days": 365,
+        "recency_floor": 0.75,
+        "filter_expired": True,
+
+        # 信息分类（品牌标识）：空值表示使用前端内置默认展示
+        "brand_admin_title": "GALA 管理后台",
+        "brand_admin_subtitle": "企业级 RAG 智能文档问答系统",
+        "brand_admin_logo": "",
+        "brand_user_title": "GALA 智能问答助手",
+        "brand_user_subtitle": "基于企业知识库的智能问答",
+        "brand_user_logo": "",
     }
 
 
@@ -173,14 +273,14 @@ def _coerce(key: str, raw):
     value = str(raw).strip()
     if spec.get("options") and value not in spec["options"]:
         raise ValueError(f"{spec['label']} 只能是 {' / '.join(spec['options'])}")
-    if not value and not spec.get("secret"):
+    if not value and not spec.get("secret") and not spec.get("allow_empty"):
         raise ValueError(f"{spec['label']} 不能为空")
     return value
 
 
-def effective(db) -> dict:
-    """生效配置：DB 覆盖 + .env 默认（含明文密钥，仅供服务内部使用）。"""
-    stored = crud.get_all_settings(db)
+def effective(db, user_id: str | None = None) -> dict:
+    """生效配置：账号设置 + .env 默认（含明文密钥，仅供服务内部使用）。"""
+    stored = crud.get_all_settings(db, user_id)
     result = _defaults()
     for key in SPECS:
         if key in stored:
@@ -188,35 +288,55 @@ def effective(db) -> dict:
                 result[key] = _coerce(key, stored[key])
             except (ValueError, TypeError):
                 logger.warning("忽略非法配置 %s=%r", key, stored[key])
+    if result["web_search_enabled"] and not (result.get("tavily_api_key") or "").strip():
+        result["web_search_enabled"] = False
     return result
 
 
-# 进程内运行时缓存：服务读取它，保存设置后立即刷新
-_runtime: dict = _defaults()
+def get_runtime(user_id: str | None = None) -> dict:
+    """当前账号的生效配置；未指定时按 contextvar 取当前请求账号。
+
+    具体账号缓存缺失（如刚注册尚未 refresh）时返回默认值，绝不回退管理员配置，
+    避免新账号复用 admin 的 API Key / 检索参数。
+    （user_id=None 表示未登录的站点公共访问，才沿用管理员配置。）
+    """
+    uid = current_user_id() if user_id is None else user_id
+    if uid in _runtimes:
+        return _runtimes[uid]
+    if uid is not None:
+        return _defaults()
+    return _runtimes.get(None) or _defaults()
 
 
-def get_runtime() -> dict:
-    return _runtime
+def refresh(db, user_id: str | None = None) -> dict:
+    """刷新指定账号的运行时缓存（user_id=None 表示站点默认/旧全局配置）。"""
+    uid = current_user_id() if user_id is None else user_id
+    _runtimes[uid] = effective(db, uid)
+    return _runtimes[uid]
 
 
-def refresh(db) -> dict:
-    global _runtime
-    _runtime = effective(db)
-    return _runtime
+def refresh_all(db) -> None:
+    """启动时载入所有账号的设置，避免首个请求读到 .env 默认값。"""
+    for uid in crud.list_user_ids(db):
+        refresh(db, uid)
+    # 站点默认（匿名访问、后台任务）沿用管理员配置
+    admin_id = crud.get_default_admin_id(db)
+    _runtimes[None] = _runtimes.get(admin_id) or effective(db, admin_id or None)
 
 
 def _validate(cfg: dict) -> None:
     if cfg["chunk_overlap"] >= cfg["chunk_size"]:
         raise ValueError("分块重叠必须小于分块大小")
-    # 开启联网搜索前必须有 Tavily Key，否则保存直接失败（避免线上问答时才暴露）
+    # 没有 Tavily Key 时不允许启用联网搜索：自动降级为关闭（避免保存其他设置被阻塞）
     if cfg["web_search_enabled"] and not (cfg.get("tavily_api_key") or "").strip():
-        raise ValueError("未配置 Tavily Key，请先填写 Tavily API Key 并保存后再开启联网搜索")
+        cfg["web_search_enabled"] = False
 
 
-def update(db, payload: dict) -> dict:
+def update(db, payload: dict, user_id: str | None = None) -> dict:
     """写入白名单内的配置（先校验后落库），返回 {config, rebuild_required}。"""
-    stored = crud.get_all_settings(db)
-    candidate = effective(db)
+    uid = current_user_id() if user_id is None else user_id
+    stored = crud.get_all_settings(db, uid)
+    candidate = effective(db, uid)
     defaults = _defaults()
     saved: dict[str, str] = {}
 
@@ -227,10 +347,9 @@ def update(db, payload: dict) -> dict:
         if raw is None:
             continue
         if raw == "":
-            if not spec.get("secret"):
+            if not spec.get("secret") and not spec.get("allow_empty"):
                 continue  # 非密钥：留空 = 不修改
-            # 密钥留空/清空 = 删除该 Key（落库空串以覆盖 .env 默认值）
-            if key not in stored and not defaults.get(key):
+            if not spec.get("allow_empty") and key not in stored and not defaults.get(key):
                 continue  # 原本就没有 Key，无需写入
         value = _coerce(key, raw)
         candidate[key] = value
@@ -238,15 +357,17 @@ def update(db, payload: dict) -> dict:
         saved[key] = "true" if value is True else "false" if value is False else str(value)
 
     _validate(candidate)
+    if not candidate["web_search_enabled"] and payload.get("web_search_enabled"):
+        saved["web_search_enabled"] = "false"
     if saved:
-        crud.set_settings(db, saved)
+        crud.set_settings(db, saved, uid)
 
     before = {key: _value_from(stored, key, defaults[key]) for key in REBUILD_KEYS}
     rebuild_required = any(str(candidate[key]) != str(before[key]) for key in REBUILD_KEYS)
 
-    refresh(db)
-    logger.info("运行时配置已更新: %s", ", ".join(sorted(saved)) or "无变更")
-    return {"config": _runtime, "rebuild_required": rebuild_required}
+    refresh(db, uid)
+    logger.info("运行时配置已更新[%s]: %s", uid or "站点默认", ", ".join(sorted(saved)) or "无变更")
+    return {"config": get_runtime(uid), "rebuild_required": rebuild_required}
 
 
 def _value_from(stored: dict, key: str, default):
@@ -277,14 +398,15 @@ def _mask(secret: str) -> str:
     return f"{secret[:4]}****{secret[-4:]}"
 
 
-def describe(db) -> dict:
+def describe(db, user_id: str | None = None) -> dict:
     """设置页展示用：当前值 + 数据来源 + 只读系统状态。
 
     密钥字段回传当前生效值（管理端保存过的优先，否则取 .env，未配置为空串），
     便于设置页「默认读取已有 Key、可直接修改后保存」。
     """
-    stored = crud.get_all_settings(db)
-    cfg = effective(db)
+    uid = current_user_id() if user_id is None else user_id
+    stored = crud.get_all_settings(db, uid)
+    cfg = effective(db, uid)
     defaults = _defaults()
     items = []
     for key, spec in SPECS.items():

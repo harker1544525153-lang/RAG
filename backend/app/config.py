@@ -71,12 +71,18 @@ class Settings:
     VECTOR_COLLECTION: str = os.getenv("VECTOR_COLLECTION", "rag_docs")
 
     # ---------- 允许上传的文件类型 ----------
-    ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".pptx"}
+    ALLOWED_EXTENSIONS = {
+        ".pdf", ".docx", ".txt", ".md", ".pptx",
+        # 代码/配置类文档：按函数、类边界结构化分块
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
+        ".sql", ".sh", ".ps1", ".json", ".yaml", ".yml", ".html", ".css", ".vue",
+    }
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 
     # ---------- 分块策略（默认值，可在「设置」页运行时覆盖） ----------
-    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "450"))        # 300~1000 字符
-    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "60"))   # 约 13% 重叠，防跨段语义断裂
+    # 512 Token 基线：中文约 1.5 字/Token ≈ 768 字符，重叠 12.5%（分类可在管理端单独配置）
+    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "768"))
+    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "96"))
 
     # ---------- 向量化模型（默认值，可在「设置」页运行时覆盖） ----------
     # local  本地开源 BGE（sentence-transformers，首次自动下载）
@@ -100,6 +106,10 @@ class Settings:
     # ---------- 检索参数（默认值，可在「设置」页运行时覆盖） ----------
     TOP_K: int = int(os.getenv("TOP_K", "2"))
     SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", "0.4"))
+    # 混合检索：向量语义召回 + BM25 关键词召回，按 RRF 融合
+    HYBRID_SEARCH_ENABLED: bool = os.getenv("HYBRID_SEARCH_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
 
     # ---------- LLM（OpenAI 兼容协议，支持多家厂商） ----------
     # 优先级：阿里云百炼 DASHCOPE_* > DeepSeek DEEPSEEK_*
@@ -124,6 +134,14 @@ class Settings:
     )
     # always：每次提问都联网；fallback：仅知识库未命中时联网
     WEB_SEARCH_MODE: str = os.getenv("WEB_SEARCH_MODE", "fallback")
+
+    # ---------- 管理后台账号 ----------
+    # 登录令牌签名密钥：留空时自动生成并保存到 DATA_DIR/.auth_secret（重启不失效）
+    AUTH_SECRET: str = os.getenv("AUTH_SECRET", "")
+    TOKEN_TTL_DAYS: int = int(os.getenv("TOKEN_TTL_DAYS", "7"))
+    # 初始管理员（仅当 users 表为空时创建）
+    DEFAULT_ADMIN_PHONE: str = os.getenv("DEFAULT_ADMIN_PHONE", "13800000000")
+    DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
 
     # ---------- 启动行为 ----------
     # Serverless 冷启动时不做后台导入（耗时长且可能被冻结），默认关闭

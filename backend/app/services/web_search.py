@@ -20,12 +20,14 @@ def _cfg() -> dict:
     return settings_service.get_runtime()
 
 
-def search(question: str, max_results: int | None = None) -> tuple[list[dict], str | None]:
+def search(
+    question: str, max_results: int | None = None, cfg: dict | None = None
+) -> tuple[list[dict], str | None]:
     """调用 Tavily 搜索，返回 ({title, url, content} 列表, 失败原因)。
 
     未配置 Key 或请求失败时返回空列表 + 中文原因，由调用方决定是否在回答中提示。
     """
-    cfg = _cfg()
+    cfg = cfg or _cfg()
     api_key = (cfg.get("tavily_api_key") or "").strip()
     if not api_key:
         logger.warning("未配置 Tavily API Key，联网搜索已跳过（可在管理端「设置」填写）")

@@ -35,15 +35,72 @@
         </div>
 
         <div class="form-grid">
+          <!-- 检索模块：先选文档类型，再复用下方形同的分块大小 / 重叠字段 -->
+          <template v-if="g.key === 'retrieval'">
+            <div class="form-row">
+              <label>文档类型</label>
+              <div class="field">
+                <select v-model="retrievalTarget">
+                  <option value="default">默认设置</option>
+                  <option v-for="c in docCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select>
+                <div class="hint">选「默认设置」编辑全局兜底参数；选具体类型后，下方策略与块大小即显示该类型当前值</div>
+              </div>
+            </div>
+            <div class="form-row">
+              <label>分块策略</label>
+              <div class="field">
+                <select
+                  v-if="targetCategory"
+                  v-model="targetCategory.strategy"
+                  @change="applyStrategyDefaults(targetCategory)"
+                >
+                  <option v-for="o in STRATEGY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+                <input v-else value="基础标准（全局兜底）" disabled />
+                <div class="hint">
+                  {{ targetCategory ? '切换策略会套用该策略的默认块大小' : '默认设置按「基础标准」兜底' }}
+                </div>
+              </div>
+            </div>
+          </template>
+
           <div class="form-row" v-for="item in groupItems(g)" :key="item.key">
             <label>
               {{ item.label }}
-              <span v-if="item.unit" class="unit">（{{ item.unit }}）</span>
+              <span v-if="item.unit" class="unit">
+                （{{ g.key === 'retrieval' && (item.key === 'chunk_size' || item.key === 'chunk_overlap') ? currentTypeUnit : item.unit }}）
+              </span>
             </label>
             <div class="field">
               <select v-if="item.options" v-model="modelForm[item.key]">
                 <option v-for="o in item.options" :key="o" :value="o">{{ o }}</option>
               </select>
+              <!-- 检索模块：分块大小 / 重叠复用为所选文档类型的参数 -->
+              <template v-else-if="g.key === 'retrieval' && item.key === 'chunk_size'">
+                <input
+                  v-if="targetCategory"
+                  type="number" :step="item.step || 1" :min="item.min" :max="item.max"
+                  v-model.number="targetCategory.chunk_size"
+                />
+                <input
+                  v-else
+                  type="number" :step="item.step || 1" :min="item.min" :max="item.max"
+                  v-model.number="modelForm[item.key]"
+                />
+              </template>
+              <template v-else-if="g.key === 'retrieval' && item.key === 'chunk_overlap'">
+                <input
+                  v-if="targetCategory"
+                  type="number" :step="item.step || 1" :min="item.min" :max="item.max"
+                  v-model.number="targetCategory.chunk_overlap"
+                />
+                <input
+                  v-else
+                  type="number" :step="item.step || 1" :min="item.min" :max="item.max"
+                  v-model.number="modelForm[item.key]"
+                />
+              </template>
               <input
                 v-else-if="item.type === 'int' || item.type === 'float'"
                 type="number"
@@ -52,6 +109,10 @@
                 :max="item.max"
                 v-model.number="modelForm[item.key]"
               />
+              <label v-else-if="item.type === 'bool'" class="switch-inline">
+                <input type="checkbox" v-model="modelForm[item.key]" />
+                <span>{{ modelForm[item.key] ? '已启用' : '已关闭' }}</span>
+              </label>
               <input
                 v-else-if="item.secret"
                 type="password"
@@ -70,6 +131,58 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <div v-if="g.key === 'retrieval'" class="type-tune-foot">
+          <button class="btn" :disabled="typeSaving" @click="saveTypeParams">
+            {{ typeSaving ? '保存中…' : (targetCategory ? `保存「${targetCategory.name}」的分块参数` : '保存默认分块参数') }}
+          </button>
+          <span class="foot-msg">{{ typeMsg }}</span>
+        </div>
+      </section>
+
+      <!-- 按文档类型的分块参数：与「文档分类」Tab 共用同一份分类配置 -->
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3>各文档类型的分块参数（只读）</h3>
+            <p>
+              仅用于查看当前生效值；如需修改，请在上方「检索、分级与时间权重」的「文档类型」下拉中选择对应类型后编辑。
+              上传时选「默认配置」，系统识别出文档类型后即按这里的参数切分。
+            </p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 180px">文档类型</th>
+                <th style="width: 150px">分块策略</th>
+                <th style="width: 132px">目标块大小</th>
+                <th style="width: 112px">重叠</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in docCategories" :key="c.id || c._tmp">
+                <td class="type-name">
+                  <span class="type-dot" :style="{ background: c.color }"></span>{{ c.name }}
+                </td>
+                <td class="read-cell">{{ strategyLabel(c.strategy) }}</td>
+                <td class="read-cell">{{ c.chunk_size }} {{ strategyUnit(c.strategy) }}</td>
+                <td class="read-cell">{{ c.chunk_overlap }} {{ strategyUnit(c.strategy) }}</td>
+                <td class="type-desc">{{ c.description || '—' }}</td>
+              </tr>
+              <tr v-if="!docCategories.length">
+                <td colspan="5" class="empty">暂无文档类型，可在「文档分类」Tab 新增</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tips">
+          目标块大小是「目标上限」而非硬性最大值：累计达到目标即切分，遇到标题 / 条款 / 步骤 / 页码边界会提前断开，
+          超长内容二次切分时保留设定的重叠。上传时手动指定分类，则直接使用该分类的这组参数。
         </div>
       </section>
 
@@ -135,7 +248,7 @@
     <section v-show="subTab === 'doc'" class="card">
       <div class="card-head">
         <div>
-          <p>用于文档管理页的归类与筛选；改名/改色保存后立即生效，删除分类会把其下文档变为「未分类」。</p>
+          <p>用于文档管理页的归类与筛选；改名/改色保存后立即生效，删除分类会把其下文档变为「未分类」。分块策略与块大小在「模型服务 → 检索、分级与时间权重」中按文档类型编辑，此处仅展示。</p>
         </div>
         <div class="actions">
           <button class="btn" @click="loadDocCategories">重置</button>
@@ -150,25 +263,39 @@
         <table>
           <thead>
             <tr>
-              <th style="width: 170px">名称</th>
-              <th style="width: 60px">颜色</th>
+              <th style="width: 150px">名称</th>
+              <th style="width: 52px">颜色</th>
+              <th style="width: 128px">分块策略</th>
+              <th style="width: 88px">目标块大小</th>
+              <th style="width: 64px">重叠</th>
               <th>说明（选填）</th>
-              <th style="width: 76px">文档数</th>
-              <th style="width: 56px"></th>
+              <th style="width: 66px">文档数</th>
+              <th style="width: 52px"></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="c in docCategories" :key="c.id || c._tmp">
               <td><input v-model="c.name" /></td>
               <td><input type="color" v-model="c.color" /></td>
-              <td><input v-model="c.description" placeholder="如：产品手册、政策制度" /></td>
+              <td class="read-cell">{{ strategyLabel(c.strategy) }}</td>
+              <td class="read-cell">{{ c.chunk_size }} {{ strategyUnit(c.strategy) }}</td>
+              <td class="read-cell">{{ c.chunk_overlap }} {{ strategyUnit(c.strategy) }}</td>
+              <td><input v-model="c.description" placeholder="如：制度条款、产品手册" /></td>
               <td class="center count">{{ c.id ? (c.doc_count || 0) : '新' }}</td>
               <td><button class="link danger" @click="removeDocRow(c)">删除</button></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div class="tips">文档分类只影响「文档管理」的归类与统计，与下面的「问答分类」是两套独立体系。</div>
+      <div class="tips">
+        分类决定上传文档的分块方式：按 Token 数（块大小以 Token 计）、基础标准（512 Token 基线 + 10%~15% 重叠）、
+        语义分块（标题/条款边界）、段落结构（标题 + 段落，适配 Word/TXT）、按页切分（同页不跨页，适配 PDF/PPT）、
+        层级分块（章节摘要 + 子块）、代码结构（按函数/类）、表格结构（重复表头按行组）、流程结构（按「第 X 步 / ①」等步骤边界）。
+        块大小是「目标上限」而非硬性最大值：累计达到目标即切分，遇到标题 / 条款 / 步骤 / 页码等边界会提前断开；
+        超长内容二次切分时相邻块保留设定的重叠字符（768 字符 ≈ 512 Token）。单位按字符计（「按 Token 数」策略下按 Token 计）。
+        如需修改策略或块大小，请到「模型服务 → 检索、分级与时间权重」的「文档类型」下拉中选择对应类型后编辑；
+        修改后已有文档需在「文档管理」中点「仅重建切片」才会生效。
+      </div>
     </section>
 
     <!-- 问答分类 -->
@@ -226,6 +353,75 @@
       </div>
     </section>
 
+    <!-- 信息分类：品牌标识（Logo / 名称），随账号独立保存 -->
+    <section v-show="subTab === 'brand'" class="brand-panel">
+      <section v-for="b in brandBlocks" :key="b.kind" class="card">
+        <div class="card-head">
+          <div>
+            <h3>{{ b.title }}</h3>
+            <p>{{ b.desc }}</p>
+          </div>
+        </div>
+
+        <div class="brand-editor">
+          <div class="logo-box">
+            <img v-if="modelForm[b.logoKey]" :src="modelForm[b.logoKey]" :alt="b.title" />
+            <span v-else class="logo-fallback">{{ b.fallback }}</span>
+          </div>
+          <div class="logo-ops">
+            <input
+              :id="`logo-file-${b.kind}`"
+              type="file"
+              accept="image/png,image/jpeg,image/svg+xml,image/webp"
+              hidden
+              @change="pickLogo(b.kind, $event)"
+            />
+            <label :for="`logo-file-${b.kind}`" class="btn mini">上传 Logo</label>
+            <button class="btn mini" @click="resetLogo(b.kind)">恢复默认</button>
+            <div class="hint">支持 PNG / JPG / SVG / WEBP，不超过 2MB；上传后立即生效</div>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row">
+            <label>名称</label>
+            <div class="field">
+              <input v-model="modelForm[b.titleKey]" :placeholder="b.defaultTitle" />
+              <div class="hint">留空则使用内置默认名称</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>副标题</label>
+            <div class="field">
+              <input v-model="modelForm[b.subtitleKey]" :placeholder="b.defaultSubtitle" />
+              <div class="hint">显示在名称下方的一句话说明</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3>用户端问答链接</h3>
+            <p>发给访客即可免登录问答；回答只使用本账号的文档与模型服务配置，不同账号链接互不影响。</p>
+          </div>
+        </div>
+        <div class="widget-link-row">
+          <input class="input" :value="widgetUrl" readonly placeholder="正在生成…" />
+          <button class="btn" @click="copyWidgetUrl">复制链接</button>
+        </div>
+        <p class="field-hint" v-if="widgetMsg">{{ widgetMsg }}</p>
+      </section>
+
+      <div class="card-foot sticky">
+        <button class="btn primary" :disabled="brandSaving" @click="saveBrand">
+          {{ brandSaving ? '保存中…' : '保存信息分类' }}
+        </button>
+        <span class="foot-msg">{{ brandMsg }}</span>
+      </div>
+    </section>
+
     <!-- 系统信息 -->
     <section v-show="subTab === 'system'" class="card">
       <div class="info-grid">
@@ -250,7 +446,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api'
 
 const subTabs = [
@@ -258,9 +454,38 @@ const subTabs = [
   { key: 'web', label: '联网搜索' },
   { key: 'doc', label: '文档分类' },
   { key: 'qa', label: '问答分类' },
+  { key: 'brand', label: '信息分类' },
   { key: 'system', label: '系统信息' }
 ]
 const subTab = ref('model')
+
+// 信息分类：后台管理 / 用户端 两套品牌标识，按当前账号保存
+const brandBlocks = [
+  {
+    kind: 'admin',
+    title: '后台管理标识',
+    desc: '管理端侧边栏顶部的 Logo、名称与副标题；仅影响当前账号的后台界面。',
+    logoKey: 'brand_admin_logo',
+    titleKey: 'brand_admin_title',
+    subtitleKey: 'brand_admin_subtitle',
+    defaultTitle: 'GALA 管理后台',
+    defaultSubtitle: '企业级 RAG 智能文档问答系统',
+    fallback: 'GALA'
+  },
+  {
+    kind: 'user',
+    title: '用户端标识',
+    desc: '用户端问答页顶部的 Logo、名称与副标题；登录用户看到自己账号的品牌配置。',
+    logoKey: 'brand_user_logo',
+    titleKey: 'brand_user_title',
+    subtitleKey: 'brand_user_subtitle',
+    defaultTitle: 'GALA 智能问答助手',
+    defaultSubtitle: '基于企业知识库的智能问答',
+    fallback: 'GALA'
+  }
+]
+const brandSaving = ref(false)
+const brandMsg = ref('')
 
 const modelGroups = [
   {
@@ -286,9 +511,13 @@ const modelGroups = [
   },
   {
     key: 'retrieval',
-    title: '检索与分块',
-    desc: '控制切片大小与召回质量；回答太慢或无关内容太多时，可上调相似度阈值。',
-    keys: ['chunk_size', 'chunk_overlap', 'top_k', 'score_threshold']
+    title: '检索、分级与时间权重',
+    desc: '分级权重让核心权威资料优先命中，时间权重让新文档优先；选择「文档类型」后，下方分块策略 / 块大小 / 重叠会显示该类型的当前值。',
+    keys: [
+      'chunk_size', 'chunk_overlap', 'top_k', 'score_threshold', 'hybrid_search_enabled',
+      'tier_core_weight', 'tier_standard_weight', 'tier_archived_weight',
+      'recency_half_life_days', 'recency_floor', 'filter_expired'
+    ]
   }
 ]
 
@@ -305,6 +534,16 @@ const modelForm = ref({})
 const originalForm = ref({})
 const categories = ref([])
 const docCategories = ref([])
+// 检索模块内按文档类型编辑：默认设置 = 全局兜底参数
+const retrievalTarget = ref('default')
+const typeSaving = ref(false)
+const typeMsg = ref('')
+const targetCategory = computed(() =>
+  retrievalTarget.value === 'default'
+    ? null
+    : docCategories.value.find(c => c.id === retrievalTarget.value) || null
+)
+const currentTypeUnit = computed(() => strategyUnit(targetCategory.value?.strategy || 'standard'))
 const saving = ref(false)
 const webSaving = ref(false)
 const docSaving = ref(false)
@@ -341,6 +580,87 @@ function groupItems(group) {
 function applyPreset(p) {
   modelForm.value.llm_base_url = p.base
   modelForm.value.llm_model = p.model
+}
+
+async function pickLogo(kind, event) {
+  const file = event.target.files && event.target.files[0]
+  if (!file) return
+  brandSaving.value = true
+  brandMsg.value = ''
+  try {
+    const res = await api.uploadBrandLogo(kind, file)
+    modelForm.value[res.key] = res.url
+    notifyBrand()
+    brandMsg.value = `${kind === 'admin' ? '后台管理' : '用户端'} Logo 已更新`
+  } catch (e) {
+    brandMsg.value = '上传失败：' + e.message
+  } finally {
+    brandSaving.value = false
+    event.target.value = ''
+  }
+}
+
+async function resetLogo(kind) {
+  brandSaving.value = true
+  brandMsg.value = ''
+  try {
+    const res = await api.resetBrandLogo(kind)
+    modelForm.value[res.key] = ''
+    notifyBrand()
+    brandMsg.value = '已恢复默认 Logo'
+  } catch (e) {
+    brandMsg.value = '恢复失败：' + e.message
+  } finally {
+    brandSaving.value = false
+  }
+}
+
+async function saveBrand() {
+  brandSaving.value = true
+  brandMsg.value = ''
+  try {
+    const payload = {}
+    for (const b of brandBlocks) {
+      payload[b.logoKey] = modelForm.value[b.logoKey] || ''
+      payload[b.titleKey] = modelForm.value[b.titleKey] || ''
+      payload[b.subtitleKey] = modelForm.value[b.subtitleKey] || ''
+    }
+    const s = await api.updateSettings(payload)
+    for (const item of s.editable || []) modelForm.value[item.key] = item.value ?? ''
+    notifyBrand()
+    brandMsg.value = '已保存，管理端与用户端立即生效'
+  } catch (e) {
+    brandMsg.value = '保存失败：' + e.message
+  } finally {
+    brandSaving.value = false
+  }
+}
+
+// 当前账号的用户端问答链接：免登录访问，问答只用本账号的文档与模型配置
+const widgetUrl = ref('')
+const widgetMsg = ref('')
+
+async function loadWidgetLink() {
+  try {
+    const d = await api.widgetLink()
+    widgetUrl.value = window.location.origin + d.url
+  } catch {
+    widgetUrl.value = ''
+  }
+}
+
+async function copyWidgetUrl() {
+  if (!widgetUrl.value) return
+  try {
+    await navigator.clipboard.writeText(widgetUrl.value)
+    widgetMsg.value = '已复制到剪贴板'
+  } catch {
+    widgetMsg.value = '复制失败，请手动选择链接复制'
+  }
+}
+
+function notifyBrand() {
+  window.dispatchEvent(new CustomEvent('gala:brand-updated'))
 }
 
 async function load() {
@@ -448,9 +768,90 @@ async function saveWeb() {
 }
 
 // ---------- 文档分类（知识库） ----------
+// 分类默认分块参数：策略决定切分方式，块大小按 512 Token 基线（中文约 768 字符）
+const STRATEGY_OPTIONS = [
+  { value: 'token', label: '按 Token 数', unit: 'Token' },
+  { value: 'standard', label: '基础标准', unit: '字符' },
+  { value: 'semantic', label: '语义分块', unit: '字符' },
+  { value: 'paragraph', label: '段落结构', unit: '字符' },
+  { value: 'page', label: '按页切分', unit: '字符' },
+  { value: 'hierarchical', label: '层级分块', unit: '字符' },
+  { value: 'code', label: '代码结构', unit: '字符' },
+  { value: 'table', label: '表格结构', unit: '字符' },
+  { value: 'flow', label: '流程结构', unit: '字符' },
+]
+function strategyUnit(strategy) {
+  return (STRATEGY_OPTIONS.find(o => o.value === strategy) || {}).unit || '字符'
+}
+function strategyLabel(strategy) {
+  return (STRATEGY_OPTIONS.find(o => o.value === strategy) || {}).label || '基础标准'
+}
+
+const STRATEGY_DEFAULTS = {
+  token: { size: 512, overlap: 64 },
+  standard: { size: 768, overlap: 96 },
+  semantic: { size: 768, overlap: 120 },
+  paragraph: { size: 768, overlap: 0 },
+  page: { size: 768, overlap: 0 },
+  hierarchical: { size: 768, overlap: 96 },
+  code: { size: 1200, overlap: 120 },
+  table: { size: 768, overlap: 0 },
+  flow: { size: 768, overlap: 96 },
+}
+function defaultsByStrategy(strategy) {
+  return STRATEGY_DEFAULTS[strategy || 'standard'] || STRATEGY_DEFAULTS.standard
+}
+
+// 切换策略时套用该策略的默认块大小与重叠，避免残留上一策略的参数
+function applyStrategyDefaults(c) {
+  const d = defaultsByStrategy(c.strategy)
+  c.chunk_size = d.size
+  c.chunk_overlap = d.overlap
+}
+
+// 保存检索模块中当前所选文档类型的分块参数
+async function saveTypeParams() {
+  typeSaving.value = true
+  typeMsg.value = ''
+  try {
+    if (targetCategory.value) {
+      const c = targetCategory.value
+      await api.updateCategory(c.id, {
+        name: c.name,
+        description: c.description || '',
+        color: c.color,
+        strategy: c.strategy || 'standard',
+        chunk_size: Number(c.chunk_size) || defaultsByStrategy(c.strategy).size,
+        chunk_overlap: Number(c.chunk_overlap) || 0,
+      })
+      await loadDocCategories()
+      typeMsg.value = `已保存「${c.name}」的分块参数，上传弹窗与文档设置弹窗同步生效`
+    } else {
+      const res = await api.updateSettings({
+        chunk_size: Number(modelForm.value.chunk_size),
+        chunk_overlap: Number(modelForm.value.chunk_overlap),
+      })
+      await load()
+      const r = res.rebuild_result
+      typeMsg.value = r
+        ? `已保存，并按新配置重建了 ${r.rebuilt}/${r.total} 篇文档的分块`
+        : '已保存默认分块参数'
+    }
+  } catch (e) {
+    typeMsg.value = '保存失败：' + e.message
+  } finally {
+    typeSaving.value = false
+  }
+}
+
 async function loadDocCategories() {
   try {
-    docCategories.value = (await api.listCategories()).map(c => ({ ...c }))
+    docCategories.value = (await api.listCategories()).map(c => ({
+      ...c,
+      strategy: c.strategy || 'standard',
+      chunk_size: c.chunk_size || defaultsByStrategy(c.strategy).size,
+      chunk_overlap: c.chunk_overlap ?? defaultsByStrategy(c.strategy).overlap,
+    }))
   } catch (e) {
     alert('文档分类加载失败：' + e.message)
   }
@@ -462,6 +863,9 @@ function addDocRow() {
     name: '',
     description: '',
     color: '#165dff',
+    strategy: 'standard',
+    chunk_size: defaultsByStrategy('standard').size,
+    chunk_overlap: defaultsByStrategy('standard').overlap,
     _tmp: Date.now()
   })
 }
@@ -487,7 +891,14 @@ async function saveDocCategories() {
     for (const c of docCategories.value) {
       const name = (c.name || '').trim()
       if (!name) continue
-      const payload = { name, description: c.description || '', color: c.color }
+      const payload = {
+        name,
+        description: c.description || '',
+        color: c.color,
+        strategy: c.strategy || 'standard',
+        chunk_size: Number(c.chunk_size) || defaultsByStrategy(c.strategy).size,
+        chunk_overlap: Number(c.chunk_overlap) || 0,
+      }
       if (c.id) {
         await api.updateCategory(c.id, payload)
       } else {
@@ -550,7 +961,10 @@ async function saveCategories() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadWidgetLink()
+})
 </script>
 
 <style scoped>
@@ -561,6 +975,13 @@ onMounted(load)
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
 .card p { font-size: 12px; color: var(--text-3); line-height: 1.6; }
 .card h3 { font-size: 14px; margin-bottom: 4px; }
+.widget-link-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+.widget-link-row input {
+  flex: 1; min-width: 0; padding: 9px 12px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: #fff; color: var(--text-2);
+}
+.field-hint { font-size: 12px; color: var(--text-3); margin-top: 6px; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 
 .sub-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
@@ -597,6 +1018,26 @@ onMounted(load)
 }
 .switch input:checked + .slider { background: var(--primary); }
 .switch input:checked + .slider::before { transform: translateX(22px); }
+.switch-inline {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text-2); cursor: pointer;
+}
+.switch-inline input { width: 16px; height: 16px; cursor: pointer; }
+
+/* 信息分类：品牌标识编辑 */
+.brand-editor { display: flex; align-items: center; gap: 18px; margin: 4px 0 18px; }
+.logo-box {
+  width: 76px; height: 76px; flex: 0 0 auto; border-radius: 16px;
+  border: 1px dashed var(--line); background: var(--bg-2, #f7f8fa);
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.logo-fallback {
+  font-size: 13px; font-weight: 700; color: var(--text-3);
+  letter-spacing: .5px;
+}
+.logo-ops { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.logo-ops .hint { flex-basis: 100%; }
 
 .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
 .row label { width: 110px; font-size: 13px; color: var(--text-2); }
@@ -643,6 +1084,15 @@ td.count { color: var(--text-3); font-size: 12px; }
 td.empty { text-align: center; color: var(--text-3); padding: 24px; }
 .link { border: none; background: none; color: var(--primary); cursor: pointer; font-size: 12px; padding: 0; }
 .link.danger { color: #c9302c; }
+
+/* 按文档类型分块参数表 */
+.type-name { display: flex; align-items: center; gap: 6px; font-weight: 500; color: var(--text); }
+.type-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.type-desc { font-size: 12px; color: var(--text-3); }
+.read-cell { font-size: 12px; color: var(--text-2); }
+
+/* 检索模块内的文档类型参数保存行 */
+.type-tune-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
 
 .info-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 12px; font-size: 12px; }
 .info-grid span { color: var(--text-3); display: block; margin-bottom: 2px; }

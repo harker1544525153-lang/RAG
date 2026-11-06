@@ -61,31 +61,34 @@ DEFAULT_CATEGORIES = [
 ]
 
 _CACHE_TTL = 15.0
-_cache: dict = {"ts": 0.0, "rules": []}
+_cache: dict[str, tuple[float, list]] = {}
 
 
 def _invalidate() -> None:
-    _cache["ts"] = 0.0
+    _cache.clear()
 
 
-def ensure_seed(db) -> None:
-    """表为空时写入默认分类（不覆盖用户已配置的内容）。"""
-    if db.execute(select(QaCategory.id).limit(1)).first():
+def ensure_seed(db, user_id: str = "") -> None:
+    """该账号还没有任何问答分类时写入默认分类（不覆盖已配置的内容）。"""
+    if db.execute(
+        select(QaCategory.id).where(QaCategory.user_id == user_id).limit(1)
+    ).first():
         return
     for item in DEFAULT_CATEGORIES:
-        db.add(QaCategory(**item))
+        db.add(QaCategory(user_id=user_id, **item))
     db.commit()
     _invalidate()
 
 
-def _rules(db) -> list[tuple[str, list[str]]]:
+def _rules(db, user_id: str = "") -> list[tuple[str, list[str]]]:
     now = time.time()
-    if now - _cache["ts"] < _CACHE_TTL:
-        return _cache["rules"]
+    cached = _cache.get(user_id)
+    if cached and now - cached[0] < _CACHE_TTL:
+        return cached[1]
     rows = (
         db.execute(
             select(QaCategory)
-            .where(QaCategory.enabled == 1)
+            .where(QaCategory.user_id == user_id, QaCategory.enabled == 1)
             .order_by(QaCategory.sort_order, QaCategory.id)
         )
         .scalars()
@@ -95,16 +98,16 @@ def _rules(db) -> list[tuple[str, list[str]]]:
         (r.id, [k.strip() for k in (r.keywords or "").split(",") if k.strip()])
         for r in rows
     ]
-    _cache.update(ts=now, rules=rules)
+    _cache[user_id] = (now, rules)
     return rules
 
 
-def classify(db, question: str) -> str:
+def classify(db, question: str, user_id: str = "") -> str:
     """把一个问题归入唯一分类 id。"""
     text = (question or "").strip()
     if not text:
         return "other"
-    for cid, keywords in _rules(db):
+    for cid, keywords in _rules(db, user_id):
         if cid == "other" or not keywords:
             continue
         if any(k in text for k in keywords):
@@ -112,9 +115,13 @@ def classify(db, question: str) -> str:
     return "other"
 
 
-def list_all(db) -> list[dict]:
+def list_all(db, user_id: str = "") -> list[dict]:
     rows = (
-        db.execute(select(QaCategory).order_by(QaCategory.sort_order, QaCategory.id))
+        db.execute(
+            select(QaCategory)
+            .where(QaCategory.user_id == user_id)
+            .order_by(QaCategory.sort_order, QaCategory.id)
+        )
         .scalars()
         .all()
     )
@@ -131,9 +138,12 @@ def list_all(db) -> list[dict]:
     ]
 
 
-def meta(db) -> dict[str, dict]:
+def meta(db, user_id: str = "") -> dict[str, dict]:
     """id -> {label, color}，供会话列表映射显示。"""
-    return {c["id"]: {"label": c["label"], "color": c["color"]} for c in list_all(db)}
+    return {
+        c["id"]: {"label": c["label"], "color": c["color"]}
+        for c in list_all(db, user_id)
+    }
 
 
 def _normalize_id(raw: str) -> str:
@@ -145,11 +155,12 @@ def _normalize_id(raw: str) -> str:
     return cid
 
 
-def create(db, data: dict) -> dict:
+def create(db, data: dict, user_id: str = "") -> dict:
     cid = _normalize_id(data.get("id", ""))
-    if db.get(QaCategory, cid):
+    if db.get(QaCategory, (user_id, cid)):
         raise ValueError(f"分类标识 {cid} 已存在")
     row = QaCategory(
+        user_id=user_id,
         id=cid,
         label=(data.get("label") or "").strip() or cid,
         color=data.get("color") or "#165dff",
@@ -163,8 +174,8 @@ def create(db, data: dict) -> dict:
     return {"id": cid}
 
 
-def update(db, cid: str, data: dict) -> dict:
-    row = db.get(QaCategory, cid)
+def update(db, cid: str, data: dict, user_id: str = "") -> dict:
+    row = db.get(QaCategory, (user_id, cid))
     if not row:
         raise ValueError("分类不存在")
     if "label" in data and data["label"] is not None:
@@ -182,14 +193,16 @@ def update(db, cid: str, data: dict) -> dict:
     return {"id": cid}
 
 
-def delete(db, cid: str) -> None:
+def delete(db, cid: str, user_id: str = "") -> None:
     if cid == "other":
         raise ValueError("「其他」为兜底分类，不能删除")
-    row = db.get(QaCategory, cid)
+    row = db.get(QaCategory, (user_id, cid))
     if not row:
         raise ValueError("分类不存在")
-    # 历史会话回落到「其他」，避免出现无对应分类的孤儿标签
-    db.query(ChatSession).filter(ChatSession.category == cid).update({"category": "other"})
+    # 历史会话回落到「其他」，避免出现无对应分类的孤儿标签（仅限本账号会话）
+    db.query(ChatSession).filter(
+        ChatSession.category == cid, ChatSession.user_id == user_id
+    ).update({"category": "other"})
     db.delete(row)
     db.commit()
     _invalidate()

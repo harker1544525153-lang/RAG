@@ -11,9 +11,15 @@ class VectorStore(Protocol):
     def delete_by_doc(self, doc_id: str) -> None: ...
 
     def search(
-        self, question: str, top_k: int | None = None, threshold: float | None = None
+        self,
+        question: str,
+        top_k: int | None = None,
+        threshold: float | None = None,
+        cfg: dict | None = None,
     ) -> list[dict]: ...
 
     def get_chunks(self, doc_id: str, limit: int = 100) -> list[dict]: ...
+
+    def all_chunks(self) -> list[dict]: ...
 
     def count(self) -> int: ...

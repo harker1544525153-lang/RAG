@@ -6,6 +6,7 @@ pgvector 向量库实现（PostgreSQL 云端模式默认）。
 - 使用 HNSW + 余弦距离索引，检索距离换算 similarity = 1 - distance。
 - 表在首次写入时按实际向量维度创建，避免 provider 切换时维度不一致。
 """
+import json
 import logging
 import re
 
@@ -64,14 +65,15 @@ class PgVectorStore:
                         text        TEXT,
                         char_start  INTEGER,
                         char_end    INTEGER,
+                        meta        TEXT,
                         embedding   vector({dim}) NOT NULL
                     )"""
                 )
             )
-            # 兼容旧表：切片字符偏移用于前端精准锚定原文片段
-            for col in ("char_start", "char_end"):
+            # 兼容旧表：切片字符偏移用于前端精准锚定原文片段；meta 存分级/标签等检索元数据
+            for col, ddl in (("char_start", "INTEGER"), ("char_end", "INTEGER"), ("meta", "TEXT")):
                 conn.execute(
-                    text(f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS {col} INTEGER")
+                    text(f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS {col} {ddl}")
                 )
             conn.execute(
                 text(f"CREATE INDEX IF NOT EXISTS {self.table}_doc_idx ON {self.table}(doc_id)")
@@ -96,10 +98,12 @@ class PgVectorStore:
     # ---------- 对外 ----------
 
     def add_chunks(self, chunks: list[dict]) -> None:
-        vectors = embeddings.embed_documents([c["text"] for c in chunks])
+        # 向量化用 embed_text（可带章节标题），原文 text 保留用于精准定位
+        vectors = embeddings.embed_documents([c.get("embed_text") or c["text"] for c in chunks])
         if not vectors:
             return
         self._ensure_table(len(vectors[0]))
+        known = {"doc_id", "page", "chunk_index", "filename", "char_start", "char_end"}
         rows = [
             {
                 "id": c["id"],
@@ -110,15 +114,18 @@ class PgVectorStore:
                 "text": c["text"],
                 "char_start": c["metadata"].get("char_start"),
                 "char_end": c["metadata"].get("char_end"),
+                "meta": json.dumps(
+                    {k: v for k, v in c["metadata"].items() if k not in known}, ensure_ascii=False
+                ),
                 "embedding": _vec_literal(v),
             }
             for c, v in zip(chunks, vectors)
         ]
         sql = text(
             f"""INSERT INTO {self.table}
-                (id, doc_id, chunk_index, page, filename, text, char_start, char_end, embedding)
+                (id, doc_id, chunk_index, page, filename, text, char_start, char_end, meta, embedding)
                 VALUES (:id, :doc_id, :chunk_index, :page, :filename, :text,
-                        :char_start, :char_end, CAST(:embedding AS vector))"""
+                        :char_start, :char_end, :meta, CAST(:embedding AS vector))"""
         )
         with engine.begin() as conn:
             for i in range(0, len(rows), 64):
@@ -133,35 +140,43 @@ class PgVectorStore:
         logger.info("pgvector 已删除文档 %s 的切片", doc_id)
 
     def search(
-        self, question: str, top_k: int | None = None, threshold: float | None = None
+        self,
+        question: str,
+        top_k: int | None = None,
+        threshold: float | None = None,
+        cfg: dict | None = None,
     ) -> list[dict]:
-        vector = embeddings.embed_query(question)
+        vector = embeddings.embed_query(question, cfg=cfg)
         # 检索只读：表由入库流程创建，此处不再重复建表（每次冷启动省 2~3 次 DDL 往返）
         if not self._exists():
             return []
-        limit = settings.SCORE_THRESHOLD if threshold is None else threshold
+        threshold = settings.SCORE_THRESHOLD if threshold is None else threshold
         k = top_k or settings.TOP_K
         q_literal = _vec_literal(vector)
+        # 有元数据过滤时多取一些候选（过滤/加权在 RAG 层完成）
+        fetch_k = max(k * 4, k + 8)
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
                     f"""SELECT text, doc_id, chunk_index, page, filename,
-                               char_start, char_end,
+                               char_start, char_end, meta,
                                embedding <=> CAST(:q AS vector) AS distance
                         FROM {self.table}
                         ORDER BY embedding <=> CAST(:q AS vector)
                         LIMIT :k"""
                 ),
-                {"q": q_literal, "k": k},
+                {"q": q_literal, "k": fetch_k},
             ).mappings().all()
         hits = []
         for row in rows:
             similarity = round(1.0 - float(row["distance"]), 4)
-            if similarity >= limit:
+            if similarity >= threshold:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
                 hits.append(
                     {
                         "text": row["text"],
                         "metadata": {
+                            **meta,
                             "doc_id": row["doc_id"],
                             "filename": row["filename"] or "",
                             "page": row["page"] or 0,
@@ -176,13 +191,41 @@ class PgVectorStore:
         logger.info("pgvector 检索 '%s': 命中 %d 条", question[:30], len(hits))
         return hits
 
+    def all_chunks(self) -> list[dict]:
+        """全量切片（供 BM25 关键词检索建索引）。"""
+        if not self._exists():
+            return []
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""SELECT id, text, doc_id, chunk_index, page, filename, char_start, char_end, meta
+                        FROM {self.table}"""
+                )
+            ).mappings().all()
+        return [
+            {
+                "id": row["id"],
+                "text": row["text"],
+                "metadata": {
+                    **(json.loads(row["meta"]) if row["meta"] else {}),
+                    "doc_id": row["doc_id"],
+                    "filename": row["filename"] or "",
+                    "page": row["page"] or 0,
+                    "chunk_index": row["chunk_index"],
+                    "char_start": row["char_start"],
+                    "char_end": row["char_end"],
+                },
+            }
+            for row in rows
+        ]
+
     def get_chunks(self, doc_id: str, limit: int = 100) -> list[dict]:
         if not self._exists():
             return []
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    f"""SELECT id, text, doc_id, chunk_index, page, filename, char_start, char_end
+                    f"""SELECT id, text, doc_id, chunk_index, page, filename, char_start, char_end, meta
                         FROM {self.table} WHERE doc_id = :doc_id
                         ORDER BY chunk_index LIMIT :limit"""
                 ),
@@ -193,6 +236,7 @@ class PgVectorStore:
                 "id": row["id"],
                 "text": row["text"],
                 "metadata": {
+                    **(json.loads(row["meta"]) if row["meta"] else {}),
                     "doc_id": row["doc_id"],
                     "filename": row["filename"] or "",
                     "page": row["page"] or 0,

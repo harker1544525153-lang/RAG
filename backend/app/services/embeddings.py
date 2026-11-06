@@ -212,10 +212,14 @@ def _build_embedder(cfg: dict) -> Embedder:
     raise ValueError(f"不支持的向量化方式: {provider}（可选 local / openai / hash）")
 
 
-def get_embedder() -> Embedder:
-    """懒加载单例；运行时配置变化时自动重建。加锁避免并发请求重复加载模型。"""
+def get_embedder(cfg: dict | None = None) -> Embedder:
+    """懒加载单例；运行时配置变化时自动重建。加锁避免并发请求重复加载模型。
+
+    cfg 可显式传入：流式响应在线程池中迭代，contextvar 取不到当前账号，
+    必须由调用方把账号配置一路传下来。
+    """
     global _embedder, _embedder_key
-    cfg = _cfg()
+    cfg = cfg or _cfg()
     key = "|".join(
         str(cfg.get(k))
         for k in (
@@ -254,19 +258,23 @@ def warmup() -> None:
 
 
 
-def embed_documents(texts: list[str]) -> list[list[float]]:
-    return get_embedder().embed_documents(texts)
+def embed_documents(texts: list[str], *, cfg: dict | None = None) -> list[list[float]]:
+    return get_embedder(cfg).embed_documents(texts)
 
 
-def embed_query(text: str) -> list[float]:
-    """问题向量化（带实例内 LRU 缓存，重复提问不再走网络/模型）。"""
-    key = text.strip()
+def embed_query(text: str, *, cfg: dict | None = None) -> list[float]:
+    """问题向量化（带实例内 LRU 缓存，重复提问不再走网络/模型）。
+
+    缓存键包含当前向量化配置签名：不同账号可能使用不同模型，不能跨配置复用向量。
+    """
+    embedder = get_embedder(cfg)
+    key = f"{_embedder_key or ''}|{text.strip()}"
     with _query_cache_lock:
         cached = _query_cache.get(key)
         if cached is not None:
             _query_cache.move_to_end(key)
             return cached
-    vector = get_embedder().embed_query(key)
+    vector = embedder.embed_query(text.strip())
     with _query_cache_lock:
         _query_cache[key] = vector
         if len(_query_cache) > _QUERY_CACHE_SIZE:

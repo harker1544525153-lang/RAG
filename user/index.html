@@ -92,6 +92,7 @@
   .avatar { display: none; }
   .logo { width: 42px; height: 42px; flex-shrink: 0; }
   .logo svg { width: 100%; height: 100%; display: block; }
+  .logo img, .welcome-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .header-info h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
   .header-info .tip { font-size: 12px; opacity: 0.85; margin-top: 2px; }
   .messages {
@@ -116,30 +117,151 @@
   .msg.user .msg-bubble { background: #165dff; color: #fff; border-top-right-radius: 4px; }
   .msg.error .msg-bubble { background: #fde8e8; color: #c9302c; border-top-left-radius: 4px; }
   .msg.sources { align-self: center; max-width: 100%; }
+  /* 检索范围：按业务模块 / 场景 / 权限精准过滤，减少噪音资料 */
+  .scope-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    background: #fff;
+    border-bottom: 1px solid #edf0f5;
+    flex-shrink: 0;
+  }
+  .scope-bar .scope-label {
+    font-size: 12px;
+    color: #4e5969;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .scope-bar .scope-label::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #165dff; opacity: .75;
+  }
+  .scope-bar select {
+    appearance: none;
+    border: 1px solid #e4e6ef;
+    background: #f7f8fc url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%2386909c'/%3E%3C/svg%3E") no-repeat right 9px center;
+    border-radius: 8px;
+    padding: 5px 26px 5px 10px;
+    font-size: 12px;
+    color: #1d2129;
+    max-width: 150px;
+    outline: none;
+    cursor: pointer;
+  }
+  .scope-bar select:focus { border-color: #165dff; background-color: #fff; }
+  .scope-bar .scope-reset {
+    border: none; background: none; color: #86909c;
+    font-size: 12px; cursor: pointer; padding: 4px 6px;
+  }
+  .scope-bar .scope-reset:hover { color: #165dff; }
+  .scope-bar .scope-tip {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    font-size: 11px;
+    color: #a3aab8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .sources-card {
     background: #f8f9fc;
     border: 1px solid #e4e6ef;
-    border-radius: 10px;
-    padding: 10px 14px;
+    border-radius: 12px;
+    padding: 12px 14px;
     width: 100%;
     font-size: 12px;
     color: #666;
   }
-  .sources-card .label { font-weight: 600; color: #165dff; margin-bottom: 4px; }
+  .sources-card .label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: #165dff;
+    margin-bottom: 8px;
+  }
+  .sources-card .label .count {
+    font-weight: 500;
+    color: #86909c;
+  }
+  .sources-card .label .order-tip {
+    margin-left: auto;
+    font-weight: 400;
+    font-size: 11px;
+    color: #a3aab8;
+  }
   .sources-card .item {
-    padding: 3px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 0;
     border-bottom: 1px dashed #e4e6ef;
   }
-  .sources-card .item:last-child { border-bottom: none; }
-  .sources-card .item .name { color: #333; font-weight: 500; }
+  .sources-card .item:last-child { border-bottom: none; padding-bottom: 2px; }
+  .sources-card .item .idx {
+    flex-shrink: 0;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #e8efff;
+    color: #165dff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .sources-card .item .item-main { flex: 1; min-width: 0; }
+  .sources-card .item .name-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .sources-card .item .name { color: #1d2129; font-weight: 600; }
   .sources-card .item .name a { color: #165dff; text-decoration: none; }
   .sources-card .item .name a:hover { text-decoration: underline; }
   .sources-card .item .name .doc-link {
-    background: none; border: none; padding: 0;
-    font: inherit; font-weight: 500; color: #165dff; cursor: pointer;
+    background: none; border: none; padding: 0; text-align: left;
+    font: inherit; font-weight: 600; color: #1d2129; cursor: pointer;
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .sources-card .item .name .doc-link:hover { text-decoration: underline; }
-  .sources-card .item .sim { color: #999; margin-left: 6px; }
+  .sources-card .item .name .doc-link:hover { color: #165dff; }
+  .sources-card .item .badge {
+    display: inline-flex; align-items: center;
+    padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; font-weight: 500; line-height: 16px;
+    flex-shrink: 0;
+  }
+  .badge.type { background: #eef0f5; color: #4e5969; }
+  .badge.tier-core { background: #fff1e8; color: #d25f00; }
+  .badge.tier-standard { background: #e8f7ee; color: #12833b; }
+  .badge.tier-archived { background: #f2f3f5; color: #86909c; }
+  .sources-card .item .meta-row {
+    margin-top: 4px;
+    color: #86909c;
+    font-size: 11px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+  }
+  .sources-card .item .meta-row .sim { color: #4e5969; }
+  .sources-card .item .meta-row .section {
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  @media (max-width: 560px) {
+    .scope-bar .scope-tip { display: none; }
+    .scope-bar select { max-width: 42vw; }
+  }
   .msg-bubble .cite { color: #165dff; text-decoration: none; font-weight: 600; }
   .msg-bubble .cite:hover { text-decoration: underline; }
   .msg-bubble .msg-link {
@@ -196,6 +318,7 @@
   }
   .welcome-logo { width: 68px; height: 68px; margin: 0 auto 14px; }
   .welcome-logo svg { width: 100%; height: 100%; display: block; }
+  .welcome-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .suggestions {
     padding: 0 20px 12px;
     display: flex; flex-wrap: wrap; gap: 8px;
@@ -242,6 +365,25 @@
     </div>
   </header>
 
+  <!-- 检索范围：按业务模块 / 适用场景 / 权限范围精准过滤，优先核心权威资料 -->
+  <div class="scope-bar">
+    <span class="scope-label">检索范围</span>
+    <select id="moduleSel" title="业务模块">
+      <option value="">全部模块</option>
+    </select>
+    <select id="scenarioSel" title="适用场景">
+      <option value="">全部场景</option>
+    </select>
+    <select id="visibilitySel" title="权限范围" hidden>
+      <option value="all">全部权限</option>
+      <option value="public">公开</option>
+      <option value="internal">内部</option>
+      <option value="admin">管理端</option>
+    </select>
+    <button class="scope-reset" type="button" onclick="resetScope()">重置</button>
+    <span class="scope-tip" id="scopeTip">按分级与时间权重排序，优先核心权威资料</span>
+  </div>
+
   <div class="messages" id="messages">
     <div class="welcome" id="welcome">
       <div class="welcome-logo">
@@ -259,7 +401,7 @@
           <circle cx="31" cy="22" r="2.3" fill="#165dff"/>
         </svg>
       </div>
-      您好！我是 GALA 智能问答助手，随时为您解答产品或业务问题。
+      <span class="welcome-text">您好！我是 GALA 智能问答助手，随时为您解答产品或业务问题。</span>
     </div>
   </div>
 
@@ -304,6 +446,108 @@ if (IS_ADMIN) {
   const tip = document.querySelector('.header-info .tip');
   if (tip) tip.textContent = '管理端会话 · 提问会归档到「问答记录」';
 }
+
+// 账号身份（优先级：账号专属链接 > 管理端 iframe 透传 > 浏览器登录态）
+// - ?at=  ：后台「用户端链接」生成的分享令牌，访客免登录，问答只用该账号的文档与模型配置
+// - ?token=：管理端 iframe 透传的当前登录令牌
+// 注意：带参数的页面一律不写 localStorage——否则 iframe（可能停留在旧账号地址）
+// 会把管理员的令牌写回浏览器，导致后台登录的普通账号被切回管理员。
+const _params = new URLSearchParams(location.search);
+const _widgetToken = _params.get('at');
+const _tokenParam = _params.get('token');
+const AUTH_TOKEN = _widgetToken || _tokenParam || localStorage.getItem('gala_token') || '';
+
+function authHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  if (AUTH_TOKEN) headers.Authorization = 'Bearer ' + AUTH_TOKEN;
+  return headers;
+}
+
+// ---------------- 品牌标识（设置 → 信息分类） ----------------
+async function loadBrand() {
+  try {
+    const resp = await fetch('/api/settings/brand', { headers: authHeaders() });
+    if (!resp.ok) return;
+    const b = await resp.json();
+    const title = b.user_title || 'GALA 智能问答助手';
+    if (title) document.title = title;
+    const h1 = document.querySelector('.header-info h1');
+    if (h1) h1.textContent = title;
+    if (!IS_ADMIN && b.user_subtitle) {
+      const tip = document.querySelector('.header-info .tip');
+      if (tip) tip.textContent = b.user_subtitle;
+    }
+    if (b.user_logo) {
+      const logoBox = document.querySelector('header .logo');
+      if (logoBox) {
+        logoBox.innerHTML = `<img src="${b.user_logo}" alt="${title}" />`;
+      }
+      const welcomeLogo = document.querySelector('.welcome-logo');
+      if (welcomeLogo) {
+        welcomeLogo.innerHTML = `<img src="${b.user_logo}" alt="${title}" />`;
+      }
+    }
+    const welcomeText = document.querySelector('.welcome-text');
+    if (welcomeText) welcomeText.textContent = `您好！我是${title}，随时为您解答产品或业务问题。`;
+  } catch (e) { /* 品牌加载失败不影响问答 */ }
+}
+
+// ---------------- 检索范围（结构化元数据过滤） ----------------
+const moduleSel = document.getElementById('moduleSel');
+const scenarioSel = document.getElementById('scenarioSel');
+const visibilitySel = document.getElementById('visibilitySel');
+const scopeTip = document.getElementById('scopeTip');
+if (IS_ADMIN) visibilitySel.hidden = false;
+
+async function loadFilters() {
+  try {
+    const resp = await fetch('/api/knowledge/filters', { headers: authHeaders() });
+    const data = await resp.json();
+    (data.modules || []).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      moduleSel.appendChild(opt);
+    });
+    (data.scenarios || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s; opt.textContent = s;
+      scenarioSel.appendChild(opt);
+    });
+  } catch (e) { /* 筛选选项加载失败不影响问答 */ }
+}
+
+function scopeParams() {
+  return {
+    module: moduleSel.value,
+    scenario: scenarioSel.value,
+    visibility: IS_ADMIN ? (visibilitySel.value || 'all') : 'public',
+  };
+}
+
+function updateScopeTip() {
+  const parts = [];
+  if (moduleSel.value) parts.push(`模块：${moduleSel.value}`);
+  if (scenarioSel.value) parts.push(`场景：${scenarioSel.value}`);
+  if (IS_ADMIN && visibilitySel.value && visibilitySel.value !== 'all') {
+    parts.push(`权限：${visibilitySel.options[visibilitySel.selectedIndex].textContent}`);
+  }
+  scopeTip.textContent = parts.length
+    ? `当前范围 · ${parts.join(' / ')}`
+    : '按分级与时间权重排序，优先核心权威资料';
+}
+
+function resetScope() {
+  moduleSel.value = '';
+  scenarioSel.value = '';
+  if (IS_ADMIN) visibilitySel.value = 'all';
+  updateScopeTip();
+}
+
+[moduleSel, scenarioSel, visibilitySel].forEach(el => {
+  el.addEventListener('change', updateScopeTip);
+});
+loadFilters();
+loadBrand();
 
 // 本次回答的参考来源；正文里的 [编号] 按它生成跳转链接
 let currentSources = [];
@@ -356,14 +600,33 @@ function addMsg(role, content, extra) {
     card.className = 'sources-card';
     const rows = content.map(s => {
       const isWeb = s.type === 'web' || !!s.url;
-      const tag = isWeb ? '联网' : `相似度 ${Math.round((s.similarity || 0) * 100)}%`;
       const label = `[${s.index}] ${escHtml(s.filename)}`;
       const name = isWeb && s.url
         ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${label}</a>`
         : (s.doc_id ? `<button type="button" class="doc-link" data-doc="${s.index}">${label}</button>` : label);
-      return `<div class="item"><span class="name">${name}</span><span class="sim">${tag}</span></div>`;
+      // 结构化元数据：文档类型（分类）+ 数据分级 + 章节 + 综合相关度
+      const typeBadge = (!isWeb && s.doc_type)
+        ? `<span class="badge type">${escHtml(s.doc_type)}</span>` : '';
+      const tierBadge = (!isWeb && s.tier)
+        ? `<span class="badge tier-${escHtml(s.tier)}">${escHtml(s.tier_label || '')}</span>` : '';
+      const meta = isWeb
+        ? `<span>联网结果</span>`
+        : [
+            s.section ? `<span class="section" title="${escHtml(s.section)}">章节：${escHtml(s.section)}</span>` : '',
+            s.effective_date ? `<span>生效：${escHtml(s.effective_date)}</span>` : '',
+            `<span class="sim">综合相关度 ${Math.round((s.score || s.similarity || 0) * 100)}%</span>`,
+          ].filter(Boolean).join('');
+      return `<div class="item">
+        <span class="idx">${s.index}</span>
+        <div class="item-main">
+          <div class="name-row"><span class="name">${name}</span>${typeBadge}${tierBadge}</div>
+          <div class="meta-row">${meta}</div>
+        </div>
+      </div>`;
     }).join('');
-    card.innerHTML = '<div class="label">📎 参考来源</div>' + rows;
+    card.innerHTML =
+      `<div class="label">📎 参考来源 <span class="count">${content.length} 条</span>` +
+      `<span class="order-tip">按相似度 × 分级 × 时间权重排序</span></div>` + rows;
     // 点击来源 -> 右侧切换到该文档的对应片段（不再新窗口打开原文）
     card.addEventListener('click', e => {
       const btn = e.target.closest('[data-doc]');
@@ -420,13 +683,29 @@ async function send() {
 
   loading = true;
   sendBtn.disabled = true;
+  let streamError = false;
 
   try {
     const resp = await fetch(API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q, session_id: sessionId, visitor_name: IS_ADMIN ? '管理员' : '' })
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        question: q,
+        session_id: sessionId,
+        visitor_name: IS_ADMIN ? '管理员' : '',
+        ...scopeParams(),
+      })
     });
+
+    // 非流式错误（如 500 JSON、401、403）：先解析错误信息，避免把 JSON 当 SSE 读导致"无回复"
+    if (!resp.ok) {
+      let message = `请求失败 (${resp.status})`;
+      try {
+        const data = await resp.json();
+        message = data.detail || message;
+      } catch {}
+      throw new Error(message);
+    }
 
     let botBubble = null;
     answerText = '';
@@ -462,19 +741,31 @@ async function send() {
           botBubble.querySelector('.msg-bubble').innerHTML = renderAnswer(answerText);
           messagesEl.scrollTop = messagesEl.scrollHeight;
         } else if (evt.type === 'error') {
+          streamError = true;
           if (/未配置|API\s*Key/i.test(evt.message || '')) {
             addMsg('error', '问答服务尚未配置模型 API Key，请先完成配置后重试。', { settingsLink: true });
           } else {
-            addMsg('error', '⚠️ ' + evt.message);
+            addMsg('error', '⚠️ ' + (evt.message || '问答失败'));
           }
           typing.remove();
         }
       }
     }
     typing.remove();
+    // 流正常结束却没有任何回答内容，也给用户明确反馈
+    if (!botBubble && !streamError) {
+      addMsg('error', '未收到回答内容，请稍后重试。');
+    }
   } catch (err) {
     typing.remove();
-    addMsg('error', '问答服务暂不可用，请检查管理后台的模型 API Key 配置后重试。', { settingsLink: true });
+    const msg = (err && err.message) ? err.message : '';
+    if (/未配置|API\s*Key/i.test(msg)) {
+      addMsg('error', '问答服务尚未配置模型 API Key，请先完成配置后重试。', { settingsLink: true });
+    } else if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+      addMsg('error', '无法连接问答服务，请确认后端服务已启动后重试。');
+    } else {
+      addMsg('error', '⚠️ ' + (msg || '问答失败，请稍后重试'));
+    }
   }
 
   loading = false;
