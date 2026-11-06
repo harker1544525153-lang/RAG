@@ -740,6 +740,7 @@ git push origin main
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `DATABASE_URL` | 是 | Neon 连接串（`postgresql+psycopg://...`） |
+| `AUTH_SECRET` | 是 | 登录令牌签名密钥，固定不变（`openssl rand -hex 32` 生成）。留空时 Vercel 各函数实例会各自生成不同密钥，表现为**登录成功后立刻退回登录页**、所有接口 401「登录状态已失效」 |
 | `EMBEDDING_PROVIDER` | 否 | 默认 `openai`（Vercel 装不下本地 BGE，勿改回 `local`） |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_MODEL` | 否 | 也可部署后在管理端「设置」填写 |
 | `ALLOW_ORIGINS` | 否 | 收敛 CORS 时填线上域名 |
@@ -775,6 +776,9 @@ git push origin main   # Vercel 自动重新部署
 
 部署自检：`/api/health` 返回 200 JSON；`/` 与 `/admin/` 正常渲染；上传文档后提问有回答，点击引用 `[n]` 能打开右侧原文并高亮。
 
+- 登录成功后立刻被踢回登录页、控制台一片 401「登录状态已失效」：**`AUTH_SECRET` 未设置**，各函数实例签名密钥不一致。到 Vercel → Settings → Environment Variables 添加固定值后重新部署。
+- 客服/用户端提问返回「请求失败 (500)」：先看 `/api/health` 的 `database` 是否为 `postgresql`（若为 `sqlite` 说明 `DATABASE_URL` 没生效，数据只存在 `/tmp`）；再看 Vercel → 对应 Deployment → Functions 日志里的超时或异常堆栈。函数上限 60 秒，冷启动 + 首次向量化可能超时，重试一次通常恢复。
+
 若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否为空。
 若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否为 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
 
@@ -789,7 +793,8 @@ git push origin main   # Vercel 自动重新部署
 首次使用在「文档管理」上传文档，向量写入 pgvector 后即可问答（`DOC/` 未打包进 Serverless 函数，「导入初始文档」在线上不可用）。
 
 > **Serverless 限制**
-> - 文件系统只读，数据目录自动落到 `/tmp/rag-data`：**业务库与向量必须走 Neon（`DATABASE_URL`）**，否则冷启动后数据丢失。
+> - 文件系统只读，数据目录自动落到 `/tmp/rag-data`：**业务库与向量必须走 Neon（`DATABASE_URL`）**，否则冷启动后数据丢失（账号也会丢失，注册后无法复用）。
+> - **必须显式配置 `AUTH_SECRET`**：Vercel 各实例没有共享文件系统，留空时每个实例各自生成签名密钥，登录令牌在下一次请求就验签失败（登录成功却立刻退回登录页、接口 401）。代码在未配置时会把密钥写入共享数据库兜底，但仍建议在环境变量里固定设置。
 > - 上传原文件只存在于 `/tmp`，实例回收即丢失；但入库时已把原文渲染成 HTML 存入 `documents.preview_html`，右侧预览与引用高亮不受影响；「重建向量索引」仍需原文件。
 > - 函数最长执行 60 秒（`vercel.json` 已设 `maxDuration: 60`），冷启动有延迟。
 > - 不支持本地 BGE / ChromaDB，向量化固定用 OpenAI 兼容 API。

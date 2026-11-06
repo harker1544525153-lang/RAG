@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 import uuid
@@ -43,6 +44,38 @@ def verify_password(password: str, stored: str) -> bool:
 _secret_cache: bytes | None = None
 
 
+def _db_secret() -> bytes | None:
+    """Serverless（Vercel）没有共享文件系统：把签名密钥存进业务库 app_settings，
+    让同一套数据库的所有函数实例使用同一个密钥。否则每个实例各自生成 /tmp 密钥，
+    登录成功后的下一个请求落到别的实例就会验签失败，表现为「登录后立刻退回登录页」。"""
+    try:
+        from app.db import SessionLocal
+        from app.models import AppSetting
+
+        db = SessionLocal()
+    except Exception:
+        return None
+    try:
+        row = db.get(AppSetting, "auth_secret")
+        if row and (row.value or "").strip():
+            return row.value.strip().encode()
+        value = secrets.token_urlsafe(48)
+        try:
+            db.add(AppSetting(key="auth_secret", value=value))
+            db.commit()
+        except Exception:
+            # 并发冷启动时可能被别的实例抢先写入，回滚后重读即可
+            db.rollback()
+            row = db.get(AppSetting, "auth_secret")
+            text = (row.value or "").strip() if row else ""
+            return text.encode() if text else None
+        return value.encode()
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
 def _secret() -> bytes:
     global _secret_cache
     if _secret_cache:
@@ -51,7 +84,13 @@ def _secret() -> bytes:
     if raw:
         _secret_cache = raw.encode()
         return _secret_cache
-    # 未配置时自动生成并落盘，避免重启后所有登录态失效
+    # Vercel 多实例：优先使用数据库里共享的密钥（未配置 AUTH_SECRET 时也能保持登录态）
+    if os.getenv("VERCEL"):
+        shared = _db_secret()
+        if shared:
+            _secret_cache = shared
+            return _secret_cache
+    # 本地/常驻部署：生成并落盘，避免重启后所有登录态失效
     path = settings.DATA_DIR / ".auth_secret"
     try:
         if path.exists():

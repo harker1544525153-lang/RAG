@@ -164,6 +164,61 @@ def _pg_relax_category_unique() -> None:
             conn.execute(text(f'ALTER TABLE categories DROP CONSTRAINT IF EXISTS "{name}"'))
 
 
+def _pg_rebuild_qa_categories() -> None:
+    """PostgreSQL：qa_categories 旧版主键是单列 id，多账号后必须改为 (user_id, id)。
+
+    `create_all` 不会修改已存在的表：旧表既没有 user_id 列，插入第二个账号的同名分类
+    还会主键冲突。云端是已上线的 Neon 库，因此这里做一次幂等重建。
+    """
+    try:
+        with engine.begin() as conn:
+            cols = {
+                r[0] for r in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'qa_categories'"
+                    )
+                ).fetchall()
+            }
+            if not cols:
+                return
+            conn.execute(
+                text(
+                    "ALTER TABLE qa_categories "
+                    "ADD COLUMN IF NOT EXISTS user_id VARCHAR(32) DEFAULT ''"
+                )
+            )
+            pk = [
+                r[0] for r in conn.execute(
+                    text(
+                        "SELECT kcu.column_name FROM information_schema.table_constraints tc "
+                        "JOIN information_schema.key_column_usage kcu "
+                        " ON tc.constraint_name = kcu.constraint_name "
+                        " AND tc.table_name = kcu.table_name "
+                        "WHERE tc.table_name = 'qa_categories' "
+                        " AND tc.constraint_type = 'PRIMARY KEY' "
+                        "ORDER BY kcu.ordinal_position"
+                    )
+                ).fetchall()
+            ]
+            if pk == ["user_id", "id"]:
+                return
+            names = [
+                r[0] for r in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_name = 'qa_categories' AND constraint_type = 'PRIMARY KEY'"
+                    )
+                ).fetchall()
+            ]
+            for name in names:
+                conn.execute(text(f'ALTER TABLE qa_categories DROP CONSTRAINT IF EXISTS "{name}"'))
+            conn.execute(text("ALTER TABLE qa_categories ADD PRIMARY KEY (user_id, id)"))
+            logger.info("结构迁移：qa_categories 已改为按账号复合主键（PostgreSQL）")
+    except Exception:
+        logger.warning("qa_categories 结构迁移失败（PostgreSQL）", exc_info=True)
+
+
 def _ensure_user_indexes() -> None:
     """为存量表补齐 user_id 索引（create_all 不会修改已存在的表）。"""
     with engine.begin() as conn:
@@ -259,6 +314,7 @@ def init_db() -> None:
         _sqlite_rebuild_legacy_tables()
     else:
         _pg_relax_category_unique()
+        _pg_rebuild_qa_categories()
     _ensure_user_indexes()
 
     logger.info("数据库初始化完成: %s", "postgresql" if settings.is_postgres else "sqlite")
