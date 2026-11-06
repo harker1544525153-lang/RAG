@@ -776,11 +776,20 @@ git push origin main   # Vercel 自动重新部署
 
 部署自检：`/api/health` 返回 200 JSON；`/` 与 `/admin/` 正常渲染；上传文档后提问有回答，点击引用 `[n]` 能打开右侧原文并高亮。
 
-- 登录成功后立刻被踢回登录页、控制台一片 401「登录状态已失效」：**`AUTH_SECRET` 未设置**，各函数实例签名密钥不一致。到 Vercel → Settings → Environment Variables 添加固定值后重新部署。
-- 客服/用户端提问返回「请求失败 (500)」：先看 `/api/health` 的 `database` 是否为 `postgresql`（若为 `sqlite` 说明 `DATABASE_URL` 没生效，数据只存在 `/tmp`）；再看 Vercel → 对应 Deployment → Functions 日志里的超时或异常堆栈。函数上限 60 秒，冷启动 + 首次向量化可能超时，重试一次通常恢复。
+### 5. 常见线上故障排查
 
-若 `/admin/` 返回 404：检查 Build Logs 是否执行了 `npm run build`、`vercel.json` 是否在仓库根、Root Directory 是否为空。
-若 `/api/health` 报数据库错误：检查 `DATABASE_URL` 是否为 `postgresql+psycopg://` 开头，且使用 Neon 的 pooled 连接串。
+| 现象 | 根因 | 处理 |
+|---|---|---|
+| **登录成功后被立刻踢回登录页**；控制台连续 401「登录状态已失效」（`/api/auth/me`、`documents`、`sessions`、`settings`、`users` 等全部 401） | Vercel Serverless 各函数实例**没有共享文件系统**。未配置 `AUTH_SECRET` 时，`security.py` 会在每个实例的 `/tmp` 各生成一份签名密钥：登录请求由实例 A 签发令牌，下一次请求落到实例 B 就验签失败，前端 `boot()` 拿到 401 后清空本地登录态，于是退回登录页 | 1. Vercel → Settings → Environment Variables 添加固定 `AUTH_SECRET`（`openssl rand -hex 32`），**Production 与 Preview 都填**；2. 确认 `DATABASE_URL` 指向 Neon；3. Redeploy 后按 `Ctrl+F5` 强刷重新登录。新版 `security.py` 在未配置 `AUTH_SECRET` 时会把密钥写入共享库 `app_settings`（`_db_secret()`）兜底，但仍建议显式配置 |
+| **用户端 / 客服界面同样报错**：`/api/knowledge/filters` 401，随后提问「请求失败 (500)」 | ① 用户端的 `?at=` 分享令牌与登录令牌共用同一签名密钥，密钥不一致时先 401；② 前端降级为匿名请求 `/api/public/chat`，若 `DATABASE_URL` 未生效（落到 `/tmp` sqlite，账号与配置查不到）或函数冷启动 + 首次向量化超过 60 秒，就返回 500 | 依次检查：`/api/health` 的 `database` 是否为 `postgresql`；Vercel → Deployment → **Functions 日志**里的异常堆栈/超时；修复 `AUTH_SECRET` 后客服链接无需重新生成，重新打开即可 |
+| 修复后仍 401 | 环境变量只配了 Production，预览部署用的是另一套；或浏览器还存着旧令牌 | 给 Preview 也配置 `AUTH_SECRET`；在控制台执行 `localStorage.removeItem('gala_token')` 后重新登录 |
+| 客服链接回答「未配置 API Key」 | 该账号没在「设置 → 模型服务」保存 Key（Key 按账号独立，不会借用管理员或其他账号的 Key） | 用该账号登录管理端填写并保存 Key，或在「用户管理」为它复制用户端链接 |
+| `/admin/` 返回 404 | Vercel 构建阶段没有产出 `frontend/dist`，或 `vercel.json` 不在仓库根、Root Directory 被误填 | 检查 Build Logs 是否执行 `npm run build`；本地先 `cd frontend && npm run build` 再提交 `dist` |
+| `/api/health` 报数据库错误 | `DATABASE_URL` 格式错误，或没用 Neon 的 pooled 连接串 | 使用 `postgresql+psycopg://USER:PASSWORD@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`；Neon 默认支持 pgvector |
+
+> 云端曾出现过的两个真实问题，已在新版本中修复并固化：
+> - **多实例签名密钥不一致**：`security.py` 的 `_secret()` 在 Vercel 下改为优先读取共享库 `app_settings.auth_secret`（并发冷启动冲突时回滚重读），显式 `AUTH_SECRET` 优先。
+> - **PostgreSQL 旧表结构**：`qa_categories` 旧版是单列主键且没有 `user_id`，多账号后插入同名分类会主键冲突、查询会 500；`db.py` 启动时会做一次幂等重建，改为复合主键 `(user_id, id)`。
 
 首次进入管理端需先用默认管理员账号登录（`DEFAULT_ADMIN_PHONE` / `DEFAULT_ADMIN_PASSWORD`，默认 `13800000000 / admin123`，登录后立即在「用户管理」重置），再进入「设置」填写 Key。Key 按账号独立保存，保存即写入数据库，无需重新部署：
 
@@ -794,7 +803,7 @@ git push origin main   # Vercel 自动重新部署
 
 > **Serverless 限制**
 > - 文件系统只读，数据目录自动落到 `/tmp/rag-data`：**业务库与向量必须走 Neon（`DATABASE_URL`）**，否则冷启动后数据丢失（账号也会丢失，注册后无法复用）。
-> - **必须显式配置 `AUTH_SECRET`**：Vercel 各实例没有共享文件系统，留空时每个实例各自生成签名密钥，登录令牌在下一次请求就验签失败（登录成功却立刻退回登录页、接口 401）。代码在未配置时会把密钥写入共享数据库兜底，但仍建议在环境变量里固定设置。
+> - **必须显式配置 `AUTH_SECRET`**：Vercel 各实例没有共享文件系统，留空时每个实例各自生成签名密钥，登录令牌在下一次请求就验签失败（登录成功却立刻退回登录页、接口 401）。新版代码在未配置时会把密钥写入共享数据库兜底（`security.py` → `_db_secret()`），但该兜底**依赖 `DATABASE_URL` 指向共享库**；若仍落到 `/tmp` sqlite，则每个实例的库与密钥都不共享，账号也会随实例回收丢失，必须同时修好 Neon 连接。
 > - 上传原文件只存在于 `/tmp`，实例回收即丢失；但入库时已把原文渲染成 HTML 存入 `documents.preview_html`，右侧预览与引用高亮不受影响；「重建向量索引」仍需原文件。
 > - 函数最长执行 60 秒（`vercel.json` 已设 `maxDuration: 60`），冷启动有延迟。
 > - 不支持本地 BGE / ChromaDB，向量化固定用 OpenAI 兼容 API。
